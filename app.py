@@ -591,7 +591,6 @@ async def vkmovie_search(q: str, kp: str = "", year: str = ""):
 @app.api_route("/vkmovie/stream", methods=["GET", "HEAD"])
 async def vkmovie_stream(request: Request):
     """Проксує VK відео/сегменти через HF Space (обхід блокування .ru доменів)"""
-    # Manual parsing like parse_proxy_params to handle url correctly
     raw_query = str(request.url.query)
     url = None
     if raw_query.startswith("url="):
@@ -603,14 +602,12 @@ async def vkmovie_stream(request: Request):
     if not url:
         return Response(content="no url", status_code=400)
         
-    # Clean the URL: strip whitespace and remove any backticks/quotes
     url = url.strip().strip('`').strip('"').strip("'").strip()
     print(f"[vkmovie/stream] Request: method={request.method}, url={repr(url)}, raw query={repr(raw_query)}")
 
     parsed_url = urlparse(url)
     is_m3u8_url = parsed_url.path.lower().endswith(".m3u8")
 
-    # Set correct referer/origin based on domain
     referer = "https://vk.com/"
     origin = "https://vk.com"
     hostname = parsed_url.hostname or ""
@@ -618,9 +615,15 @@ async def vkmovie_stream(request: Request):
     if "vkvideo.ru" in url or hostname.endswith("vkvideo.ru"):
         referer = "https://vkvideo.ru/"
         origin = "https://vkvideo.ru"
-    elif "okcdn.ru" in url or hostname.endswith("okcdn.ru") or "vkuser.net" in url or hostname.endswith("vkuser.net"):
+    elif "okcdn.ru" in url or hostname.endswith("okcdn.ru") or "ok.ru" in url or hostname.endswith("ok.ru"):
+        referer = "https://ok.ru/"
+        origin = "https://ok.ru"
+    elif "vkuser.net" in url or hostname.endswith("vkuser.net"):
         referer = "https://vk.com/"
         origin = "https://vk.com"
+
+    referer = referer.strip().strip('`').strip('"').strip("'").strip()
+    origin = origin.strip().strip('`').strip('"').strip("'").strip()
 
     print(f"[vkmovie/stream] Using referer: {repr(referer)}, origin: {repr(origin)}")
 
@@ -628,7 +631,7 @@ async def vkmovie_stream(request: Request):
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
         "Referer": referer,
         "Origin": origin,
-        "Accept": "*/*",
+        "Accept": "application/vnd.apple.mpegurl,application/x-mpegURL,*/*",
         "Accept-Language": "ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7",
         "Connection": "keep-alive",
         "Sec-Fetch-Dest": "video",
@@ -883,7 +886,7 @@ async def vkmovie_stream(request: Request):
 
 @app.get("/")
 async def root():
-    return {"status": "ok"}
+    return {"status": "ok", "build": "2026-07-08.1"}
 
 
 # ── VeoVeo via kinoserial embed ───────────────────────────────────────────────
