@@ -602,29 +602,60 @@ async def _extract_video_urls_from_player(player_url: str) -> dict:
             })
             html = r.text
             
-            # Ищем JSON с url в window.videoPlayerConfig или подобном
-            matches = re.findall(r'"url(\d+)":"([^"]+)"', html)
+            print(f"[player] fetched {len(html)} bytes from {player_url}")
+            
+            # Пробуем разные паттерны для разных версий плеера
             urls = {}
+            
+            # Паттерн 1: "url720":"https://..."
+            matches = re.findall(r'"url(\d+)":"([^"]+)"', html)
             for quality, url in matches:
                 try:
-                    # Декодируем escaped URL
                     decoded_url = url.encode('utf-8').decode('unicode_escape')
-                    # Проверяем что есть subId (признак рабочего URL)
-                    if 'subId=' in decoded_url:
+                    if decoded_url and ('subId=' in decoded_url or 'okcdn.ru' in decoded_url or 'vkuser.net' in decoded_url):
                         urls[f"mp4_{quality}"] = decoded_url
+                        print(f"[player] found mp4_{quality}: {decoded_url[:100]}...")
                 except Exception:
                     continue
             
-            # Ищем hls
-            hls_match = re.search(r'"hls":"([^"]+)"', html)
-            if hls_match:
+            # Паттерн 2: "hls":"https://..."
+            hls_patterns = [
+                r'"hls":"([^"]+)"',
+                r'"hlsUrl":"([^"]+)"',
+                r'"hlsMasterPlaylistUrl":"([^"]+)"'
+            ]
+            for pattern in hls_patterns:
+                hls_match = re.search(pattern, html)
+                if hls_match:
+                    try:
+                        hls_url = hls_match.group(1).encode('utf-8').decode('unicode_escape')
+                        if hls_url and ('subId=' in hls_url or 'm3u8' in hls_url):
+                            urls["hls"] = hls_url
+                            print(f"[player] found hls: {hls_url[:100]}...")
+                            break
+                    except Exception:
+                        pass
+            
+            # Паттерн 3: поиск JSON блоков с player_config
+            json_blocks = re.findall(r'(?:playerConfig|videoConfig|player_config)\s*[:=]\s*(\{[^}]+\})', html, re.IGNORECASE)
+            for block in json_blocks:
                 try:
-                    hls_url = hls_match.group(1).encode('utf-8').decode('unicode_escape')
-                    if 'subId=' in hls_url:
-                        urls["hls"] = hls_url
+                    # Пытаемся найти URL в JSON блоке
+                    block_urls = re.findall(r'"url\d*":\s*"([^"]+)"', block)
+                    for url in block_urls:
+                        decoded = url.encode('utf-8').decode('unicode_escape')
+                        if 'subId=' in decoded or 'okcdn' in decoded:
+                            # Определяем качество по размеру или паттерну
+                            if '/720/' in decoded or 'url720' in block:
+                                urls['mp4_720'] = decoded
+                            elif '/1080/' in decoded or 'url1080' in block:
+                                urls['mp4_1080'] = decoded
+                            elif 'm3u8' in decoded:
+                                urls['hls'] = decoded
                 except Exception:
-                    pass
-                    
+                    continue
+            
+            print(f"[player] extracted {len(urls)} URLs")
             return urls
     except Exception as e:
         print(f"[player] extraction error: {e}")
