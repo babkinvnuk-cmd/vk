@@ -591,7 +591,9 @@ async def vkmovie_search(q: str, kp: str = "", year: str = ""):
 @app.api_route("/vkmovie/stream", methods=["GET", "HEAD"])
 async def vkmovie_stream(url: str, request: Request):
     """Проксує VK відео/сегменти через HF Space (обхід блокування .ru доменів)"""
-    print(f"[vkmovie/stream] Request: method={request.method}, url={url}")
+    # Clean the URL: strip whitespace and remove any backticks/quotes
+    url = url.strip().strip('`').strip('"').strip("'").strip()
+    print(f"[vkmovie/stream] Request: method={request.method}, url={repr(url)}")
     if not url:
         return Response(content="no url", status_code=400)
 
@@ -618,7 +620,6 @@ async def vkmovie_stream(url: str, request: Request):
         "Origin": origin,
         "Accept": "*/*",
         "Accept-Language": "ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7",
-        "Accept-Encoding": "identity",
         "Connection": "keep-alive",
         "Sec-Fetch-Dest": "video",
         "Sec-Fetch-Mode": "cors",
