@@ -283,38 +283,45 @@ async def vkvideo_search(q: str = "", offset: int = 0, count: int = 50):
     
     import urllib.parse
     
-    # Використовуємо video.search з adult=1 (вимикає Safe Search)
-    search_url = (
-        f"https://api.vk.com/method/video.search?v=5.131"
-        f"&q={urllib.parse.quote(q)}&offset={offset}&count={count}"
-        f"&adult=1&access_token={token}"
+    # catalog.getVideoSearchWeb2 - повертає результати з анонімним токеном
+    post_data = (
+        "screen_ref=search_video_service&input_method=keyboard_search_button"
+        f"&q={urllib.parse.quote(q)}&offset={offset}&count={count}&access_token={token}"
     )
-    
+
     async with httpx.AsyncClient(timeout=15, follow_redirects=True) as client:
-        r = await client.get(search_url, headers={
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-            "Referer": "https://vk.com/",
-        })
-    
+        r = await client.post(
+            VK_SEARCH_URL,
+            content=post_data.encode(),
+            headers={
+                "Content-Type": "application/x-www-form-urlencoded",
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+                "Origin": "https://vkvideo.ru",
+                "Referer": "https://vkvideo.ru/",
+            }
+        )
+
     try:
         data = r.json()
     except Exception:
         return Response(content='{"error":"parse"}', status_code=500,
                         media_type="application/json", headers={"Access-Control-Allow-Origin": "*"})
-    
-    items = data.get("response", {}).get("items", [])
-    
+
+    videos = data.get("response", {}).get("catalog_videos", [])
+
     results = []
-    for v in items:
+    for item in videos:
+        v = item.get("video")
+        if not v:
+            continue
         files = v.get("files") or {}
-        
         results.append({
             "id": v.get("id"),
             "owner_id": v.get("owner_id"),
             "title": v.get("title"),
             "description": v.get("description", ""),
             "duration": v.get("duration", 0),
-            "image": v.get("image", []),  # Віддаємо весь масив
+            "image": v.get("image", []),
             "date": v.get("date"),
             "views": v.get("views", 0),
             "player": v.get("player"),
