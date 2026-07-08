@@ -697,10 +697,23 @@ async def _extract_video_urls_from_player(player_url: str) -> dict:
             
             print(f"[player] fetched {len(html)} bytes from {player_url}")
             
-            # DEBUG: выводим первые 2000 символов HTML чтобы увидеть структуру
-            print(f"[player] DEBUG HTML sample (first 2000 chars):")
-            print(html[:2000])
-            print("[player] DEBUG HTML sample (end)")
+            # Ищем window.vk JavaScript объект
+            vk_data_match = re.search(r'window\.vk\s*=\s*Object\.assign\(window\.vk\s*\|\|\s*\{\},\s*(\{.+?\})\s*\);', html, re.DOTALL)
+            if vk_data_match:
+                vk_json_text = vk_data_match.group(1)
+                print(f"[player] DEBUG found window.vk object, length={len(vk_json_text)}")
+                # Пытаемся найти URLs внутри
+                vk_urls_in_json = re.findall(r'https?://[^"\']+(?:vkuser\.net|okcdn\.ru)[^"\']+', vk_json_text)
+                if vk_urls_in_json:
+                    print(f"[player] DEBUG found {len(vk_urls_in_json)} URLs in window.vk")
+                    for i, u in enumerate(vk_urls_in_json[:3]):
+                        print(f"[player] DEBUG window.vk URL {i+1}: {u[:150]}")
+                else:
+                    print(f"[player] DEBUG no CDN URLs found in window.vk")
+                    # Выводим кусок JSON для анализа
+                    print(f"[player] DEBUG window.vk sample: {vk_json_text[:500]}")
+            else:
+                print(f"[player] DEBUG window.vk object NOT found")
             
             # DEBUG: поиск различных паттернов URL в HTML
             # 1. Ищем все строки содержащие vkuser.net или okcdn.ru
