@@ -308,13 +308,6 @@ async def vkvideo_search(q: str = "", offset: int = 0, count: int = 50):
                 if not v:
                     continue
                 files = v.get("files") or {}
-                
-                # Фильтруем URL без subId
-                for quality_key in ['mp4_2160', 'mp4_1440', 'mp4_1080', 'mp4_720', 'mp4_480', 'mp4_360', 'mp4_240', 'hls']:
-                    url = files.get(quality_key)
-                    if url and 'subId=' not in str(url):
-                        files[quality_key] = None
-                
                 results.append({
                     "id": v.get("id"), "owner_id": v.get("owner_id"),
                     "title": v.get("title"), "description": v.get("description", ""),
@@ -356,13 +349,6 @@ async def vkvideo_search(q: str = "", offset: int = 0, count: int = 50):
                     vdata = vr.json()
                     for v in vdata.get("response", {}).get("items", []):
                         files = v.get("files") or {}
-                        
-                        # Фильтруем URL без subId
-                        for quality_key in ['mp4_2160', 'mp4_1440', 'mp4_1080', 'mp4_720', 'mp4_480', 'mp4_360', 'mp4_240', 'hls']:
-                            url = files.get(quality_key)
-                            if url and 'subId=' not in str(url):
-                                files[quality_key] = None
-                        
                         results.append({
                             "id": v.get("id"), "owner_id": v.get("owner_id"),
                             "title": v.get("title"), "description": v.get("description", ""),
@@ -511,14 +497,6 @@ async def vkvideo_adult_search(q: str = "", offset: int = 0, count: int = 50):
                     continue
                 files = v.get("files") or {}
                 existing.add(key)
-                
-                # Фильтруем все URL без subId - они битые
-                for quality_key in ['mp4_2160', 'mp4_1440', 'mp4_1080', 'mp4_720', 'mp4_480', 'mp4_360', 'mp4_240', 'hls']:
-                    url = files.get(quality_key)
-                    if url and 'subId=' not in str(url):
-                        # URL без subId - битый, убираем
-                        files[quality_key] = None
-                
                 results.append({
                     "id": v.get("id"), "owner_id": v.get("owner_id"),
                     "title": v.get("title"), "description": v.get("description", ""),
