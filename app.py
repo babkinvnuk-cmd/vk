@@ -212,6 +212,7 @@ VK_CLIENT_ID = 52461373
 VK_CLIENT_SECRET = "o557NLIkAErNhakXrQ7A"
 VK_TOKEN_URL = "https://login.vk.com/?act=get_anonym_token"
 VK_SEARCH_URL = f"https://api.vkvideo.ru/method/catalog.getVideoSearchWeb2?v=5.264&client_id={VK_CLIENT_ID}"
+VK_SEARCH_OLD_URL = f"https://api.vk.com/method/video.search?v=5.131&adult=1"  # Старий API з підтримкою adult
 
 _vk_token: str = ""
 _vk_token_expires: float = 0.0
@@ -246,7 +247,7 @@ async def _get_vk_token() -> str:
 
 
 @app.get("/vkvideo/search")
-async def vkvideo_search(q: str, offset: int = 0, count: int = 50):
+async def vkvideo_search(q: str, offset: int = 0, count: int = 50, adult: int = 1):
     """Пошук відео VK Video БЕЗ фільтрів - включає весь контент"""
     token = await _get_vk_token()
     if not token:
@@ -254,22 +255,15 @@ async def vkvideo_search(q: str, offset: int = 0, count: int = 50):
                         media_type="application/json", headers={"Access-Control-Allow-Origin": "*"})
     
     import urllib.parse
-    post_data = (
-        "screen_ref=search_video_service&input_method=keyboard_search_button"
-        f"&q={urllib.parse.quote(q)}&offset={offset}&count={count}&access_token={token}"
-    )
+    
+    # Використовуємо старий API video.search який підтримує adult параметр
+    search_url = f"{VK_SEARCH_OLD_URL}&q={urllib.parse.quote(q)}&offset={offset}&count={count}&access_token={token}"
     
     async with httpx.AsyncClient(timeout=15, follow_redirects=True) as client:
-        r = await client.post(
-            VK_SEARCH_URL,
-            content=post_data.encode(),
-            headers={
-                "Content-Type": "application/x-www-form-urlencoded",
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-                "Origin": "https://vkvideo.ru",
-                "Referer": "https://vkvideo.ru/",
-            }
-        )
+        r = await client.get(search_url, headers={
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+            "Referer": "https://vk.com/",
+        })
     
     try:
         data = r.json()
@@ -277,15 +271,11 @@ async def vkvideo_search(q: str, offset: int = 0, count: int = 50):
         return Response(content='{"error":"parse"}', status_code=500,
                         media_type="application/json", headers={"Access-Control-Allow-Origin": "*"})
     
-    videos = data.get("response", {}).get("catalog_videos", [])
+    items = data.get("response", {}).get("items", [])
     
-    # БЕЗ фільтрації - віддаємо все що є
+    # Парсимо результати
     results = []
-    for item in videos:
-        v = item.get("video")
-        if not v:
-            continue
-        
+    for v in items:
         files = v.get("files") or {}
         player_url = v.get("player")
         
