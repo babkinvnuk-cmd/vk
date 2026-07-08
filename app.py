@@ -248,29 +248,26 @@ async def _get_vk_token() -> str:
 
 @app.get("/vkvideo/search")
 async def vkvideo_search(q: str, offset: int = 0, count: int = 50):
-    """Пошук відео VK Video"""
+    """Пошук відео VK Video з adult контентом"""
     token = await _get_vk_token()
     if not token:
         return Response(content='{"error":"no_token"}', status_code=503,
                         media_type="application/json", headers={"Access-Control-Allow-Origin": "*"})
     
     import urllib.parse
-    post_data = (
-        "screen_ref=search_video_service&input_method=keyboard_search_button"
-        f"&q={urllib.parse.quote(q)}&offset={offset}&count={count}&access_token={token}"
+    
+    # Використовуємо video.search з adult=1 (вимикає Safe Search)
+    search_url = (
+        f"https://api.vk.com/method/video.search?v=5.131"
+        f"&q={urllib.parse.quote(q)}&offset={offset}&count={count}"
+        f"&adult=1&access_token={token}"
     )
     
     async with httpx.AsyncClient(timeout=15, follow_redirects=True) as client:
-        r = await client.post(
-            VK_SEARCH_URL,
-            content=post_data.encode(),
-            headers={
-                "Content-Type": "application/x-www-form-urlencoded",
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-                "Origin": "https://vkvideo.ru",
-                "Referer": "https://vkvideo.ru/",
-            }
-        )
+        r = await client.get(search_url, headers={
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+            "Referer": "https://vk.com/",
+        })
     
     try:
         data = r.json()
@@ -278,14 +275,10 @@ async def vkvideo_search(q: str, offset: int = 0, count: int = 50):
         return Response(content='{"error":"parse"}', status_code=500,
                         media_type="application/json", headers={"Access-Control-Allow-Origin": "*"})
     
-    videos = data.get("response", {}).get("catalog_videos", [])
+    items = data.get("response", {}).get("items", [])
     
     results = []
-    for item in videos:
-        v = item.get("video")
-        if not v:
-            continue
-        
+    for v in items:
         files = v.get("files") or {}
         
         results.append({
@@ -294,7 +287,7 @@ async def vkvideo_search(q: str, offset: int = 0, count: int = 50):
             "title": v.get("title"),
             "description": v.get("description", ""),
             "duration": v.get("duration", 0),
-            "image": v.get("image"),
+            "image": v.get("image", []),  # Віддаємо весь масив
             "date": v.get("date"),
             "views": v.get("views", 0),
             "player": v.get("player"),
