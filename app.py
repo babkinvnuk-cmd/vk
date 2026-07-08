@@ -588,7 +588,7 @@ async def vkmovie_search(q: str, kp: str = "", year: str = ""):
 
 
 
-@app.get("/vkmovie/stream")
+@app.api_route("/vkmovie/stream", methods=["GET", "HEAD"])
 async def vkmovie_stream(url: str, request: Request):
     """Проксує VK відео/сегменти через HF Space (обхід блокування .ru доменів)"""
     if not url:
@@ -623,6 +623,30 @@ async def vkmovie_stream(url: str, request: Request):
 
     is_m3u8 = "mpegurl" in probe_ct or probe_text.lstrip().startswith("#EXTM3U") or url.lower().endswith(".m3u8")
     is_large = probe_cl > 10 * 1024 * 1024  # > 10MB
+
+    if request.method == "HEAD":
+        head_status = 200 if probe.status_code == 206 else probe.status_code
+
+        if is_m3u8:
+            return Response(
+                content=b"",
+                status_code=head_status,
+                media_type="application/vnd.apple.mpegurl",
+                headers={"Access-Control-Allow-Origin": "*"}
+            )
+
+        resp_headers = {
+            "Access-Control-Allow-Origin": "*",
+            "Accept-Ranges": "bytes",
+            "Content-Type": probe_ct or "video/mp4",
+        }
+
+        if probe_cl_header:
+            resp_headers["content-range"] = probe_cl_header
+        if probe_cl:
+            resp_headers["content-length"] = str(probe_cl)
+
+        return Response(content=b"", status_code=head_status, headers=resp_headers, media_type=resp_headers["Content-Type"])
 
     if is_m3u8:
         # m3u8 — завантажуємо повністю БЕЗ range header і переписуємо URL
