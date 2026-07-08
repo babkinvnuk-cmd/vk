@@ -370,6 +370,111 @@ async def vkvideo_search(q: str = "", offset: int = 0, count: int = 50):
     )
 
 
+@app.get("/vkvideo/adult")
+async def vkvideo_adult_search(q: str = "", offset: int = 0, count: int = 50):
+    """Пошук відео - VK API + DDG site:vkvideo.ru паралельно"""
+    if not q:
+        return Response(content='{"error":"no query"}', status_code=400,
+                        media_type="application/json", headers={"Access-Control-Allow-Origin": "*"})
+
+    token = await _get_vk_token()
+    if not token:
+        return Response(content='{"error":"no_token"}', status_code=503,
+                        media_type="application/json", headers={"Access-Control-Allow-Origin": "*"})
+
+    import urllib.parse
+    results = []
+    existing = set()
+
+    async with httpx.AsyncClient(timeout=20, follow_redirects=True) as client:
+
+        # 1. Звичайний VK API пошук
+        try:
+            post_data = (
+                "screen_ref=search_video_service&input_method=keyboard_search_button"
+                f"&q={urllib.parse.quote(q)}&offset={offset}&count={count}&access_token={token}"
+            )
+            r = await client.post(VK_SEARCH_URL, content=post_data.encode(), headers={
+                "Content-Type": "application/x-www-form-urlencoded",
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+                "Origin": "https://vkvideo.ru",
+                "Referer": "https://vkvideo.ru/",
+            })
+            data = r.json()
+            for item in data.get("response", {}).get("catalog_videos", []):
+                v = item.get("video")
+                if not v:
+                    continue
+                key = f"{v.get('owner_id')}_{v.get('id')}"
+                if key in existing:
+                    continue
+                existing.add(key)
+                files = v.get("files") or {}
+                results.append({
+                    "id": v.get("id"), "owner_id": v.get("owner_id"),
+                    "title": v.get("title"), "description": v.get("description", ""),
+                    "duration": v.get("duration", 0), "image": v.get("image", []),
+                    "date": v.get("date"), "views": v.get("views", 0),
+                    "player": v.get("player"),
+                    "mp4_1080": files.get("mp4_1080"), "mp4_720": files.get("mp4_720"),
+                    "mp4_480": files.get("mp4_480"), "mp4_360": files.get("mp4_360"),
+                    "hls": files.get("hls"), "subtitles": v.get("subtitles") or [],
+                })
+        except Exception as e:
+            print(f"[vkvideo/adult] VK API error: {e}")
+
+        # 2. DuckDuckGo site:vkvideo.ru - знаходить те що VK приховує
+        try:
+            ddg_url = f"https://html.duckduckgo.com/html/?q={urllib.parse.quote(q + ' site:vkvideo.ru')}"
+            dr = await client.get(ddg_url, headers={
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124.0.0.0 Safari/537.36",
+                "Accept": "text/html,application/xhtml+xml",
+                "Accept-Language": "en-US,en;q=0.9",
+            })
+            html = dr.text
+            vk_ids = re.findall(r'vkvideo\.ru/video(-?\d+)_(\d+)', html)
+            vk_ids += re.findall(r'vk\.com/video(-?\d+)_(\d+)', html)
+            vk_ids = list(dict.fromkeys(vk_ids))
+            print(f"[vkvideo/adult] DDG found {len(vk_ids)} IDs for '{q}'")
+
+            for owner_id, video_id in vk_ids[:30]:
+                key = f"{owner_id}_{video_id}"
+                if key in existing:
+                    continue
+                try:
+                    vg_url = (
+                        f"https://api.vkvideo.ru/method/video.get"
+                        f"?v=5.264&client_id={VK_CLIENT_ID}"
+                        f"&videos={owner_id}_{video_id}&access_token={token}"
+                    )
+                    vr = await client.get(vg_url, headers={"User-Agent": "Mozilla/5.0", "Referer": "https://vkvideo.ru/"})
+                    vdata = vr.json()
+                    for v in vdata.get("response", {}).get("items", []):
+                        files = v.get("files") or {}
+                        existing.add(key)
+                        results.append({
+                            "id": v.get("id"), "owner_id": v.get("owner_id"),
+                            "title": v.get("title"), "description": v.get("description", ""),
+                            "duration": v.get("duration", 0), "image": v.get("image", []),
+                            "date": v.get("date"), "views": v.get("views", 0),
+                            "player": v.get("player"),
+                            "mp4_1080": files.get("mp4_1080"), "mp4_720": files.get("mp4_720"),
+                            "mp4_480": files.get("mp4_480"), "mp4_360": files.get("mp4_360"),
+                            "hls": files.get("hls"), "subtitles": v.get("subtitles") or [],
+                        })
+                except Exception:
+                    continue
+        except Exception as e:
+            print(f"[vkvideo/adult] DDG error: {e}")
+
+    import json
+    return Response(
+        content=json.dumps({"items": results, "count": len(results), "offset": offset}, ensure_ascii=False),
+        media_type="application/json",
+        headers={"Access-Control-Allow-Origin": "*"}
+    )
+
+
 @app.get("/vkmovie/search")
 async def vkmovie_search(q: str, kp: str = "", year: str = ""):
     """Ищет фильм в VK Video по названию+год, возвращает прямые MP4 ссылки"""
