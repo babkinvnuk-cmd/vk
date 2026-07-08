@@ -423,19 +423,19 @@ async def vkvideo_adult_search(q: str = "", offset: int = 0, count: int = 50):
         except Exception as e:
             print(f"[vkvideo/adult] VK API error: {e}")
 
-        # 2. DuckDuckGo site:vkvideo.ru - знаходить те що VK приховує
+        # 2. Bing site:vkvideo.ru - знаходить те що VK приховує
         try:
-            ddg_url = f"https://html.duckduckgo.com/html/?q={urllib.parse.quote(q + ' site:vkvideo.ru')}"
-            dr = await client.get(ddg_url, headers={
+            bing_url = f"https://www.bing.com/search?q={urllib.parse.quote(q + ' site:vkvideo.ru')}&count=50&setlang=ru&cc=ru&safeSearch=Off"
+            br = await client.get(bing_url, headers={
                 "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124.0.0.0 Safari/537.36",
                 "Accept": "text/html,application/xhtml+xml",
-                "Accept-Language": "en-US,en;q=0.9",
+                "Accept-Language": "ru-RU,ru;q=0.9,en;q=0.8",
             })
-            html = dr.text
+            html = br.text
             vk_ids = re.findall(r'vkvideo\.ru/video(-?\d+)_(\d+)', html)
             vk_ids += re.findall(r'vk\.com/video(-?\d+)_(\d+)', html)
             vk_ids = list(dict.fromkeys(vk_ids))
-            print(f"[vkvideo/adult] DDG found {len(vk_ids)} IDs for '{q}'")
+            print(f"[vkvideo/adult] Bing found {len(vk_ids)} IDs for '{q}'")
 
             for owner_id, video_id in vk_ids[:30]:
                 key = f"{owner_id}_{video_id}"
@@ -465,7 +465,7 @@ async def vkvideo_adult_search(q: str = "", offset: int = 0, count: int = 50):
                 except Exception:
                     continue
         except Exception as e:
-            print(f"[vkvideo/adult] DDG error: {e}")
+            print(f"[vkvideo/adult] Bing error: {e}")
 
     import json
     return Response(
