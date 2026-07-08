@@ -604,10 +604,16 @@ async def vkmovie_stream(request: Request):
         return Response(content="no url", status_code=400)
         
     url = url.strip().replace("`", "").strip().strip('"').strip("'").strip()
+    for _ in range(2):
+        url2 = unquote(url)
+        if url2 == url:
+            break
+        url = url2
+    url = url.strip().replace("`", "").strip().strip('"').strip("'").strip()
     print(f"[vkmovie/stream] Request: method={request.method}, url={repr(url)}, raw query={repr(raw_query)}")
 
     parsed_incoming = urlparse(url)
-    if parsed_incoming.netloc and (parsed_incoming.netloc.endswith("okcdn.ru") or parsed_incoming.netloc.endswith("vkuser.net")):
+    if parsed_incoming.netloc and parsed_incoming.netloc.endswith("okcdn.ru"):
         if OKCDN_UPSTREAM:
             return RedirectResponse(
                 url=f"{OKCDN_UPSTREAM}/vkmovie/stream?url={quote(url, safe='')}",
