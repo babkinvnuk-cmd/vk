@@ -682,26 +682,48 @@ async def vkmovie_stream(url: str, request: Request):
     if range_header:
         req_headers["range"] = range_header
 
+    probe = None
+    probe_ct = ""
+    probe_cl_header = ""
+    probe_cl = 0
+    probe_text = ""
+
     async with httpx.AsyncClient(timeout=15, follow_redirects=True) as client:
+        # First try to probe with range if present, or range=0-512
         try:
             probe_headers = dict(req_headers)
             if range_header:
                 probe_headers["range"] = range_header
             else:
                 probe_headers["range"] = "bytes=0-511"
-            print(f"[vkmovie/stream] Probing: {url}, headers={probe_headers}")
+            print(f"[vkmovie/stream] Probing with range: {url}, headers={probe_headers}")
             probe = await client.get(url, headers=probe_headers)
-            probe_ct = probe.headers.get("content-type", "")
-            probe_cl_header = probe.headers.get("content-range", "")
-            if probe_cl_header and "/" in probe_cl_header:
-                probe_cl = int(probe_cl_header.split("/")[-1] or 0)
-            else:
-                probe_cl = int(probe.headers.get("content-length", 0))
-            probe_text = probe.content[:512].decode("utf-8", errors="ignore")
-            print(f"[vkmovie/stream] Probe result: status={probe.status_code}, ct={probe_ct}, cl={probe_cl}")
+            
+            # If we got a 400 error and it's okcdn/vkuser, try again WITHOUT range header!
+            if (("okcdn.ru" in url or "vkuser.net" in url) and 
+                (probe.status_code == 400 or len(probe.content) <= 3)):
+                print(f"[vkmovie/stream] Got 400/small response, retrying WITHOUT range header")
+                no_range_headers = {k: v for k, v in req_headers.items() if k.lower() != "range"}
+                probe = await client.get(url, headers=no_range_headers)
+                
         except Exception as e:
             print(f"[vkmovie/stream] Probe error: {e}")
-            return Response(content=f"error: {e}", status_code=500)
+            # Try without range header as fallback
+            try:
+                print(f"[vkmovie/stream] Retrying probe without range")
+                no_range_headers = {k: v for k, v in req_headers.items() if k.lower() != "range"}
+                probe = await client.get(url, headers=no_range_headers)
+            except Exception as e2:
+                return Response(content=f"error: {e2}", status_code=500)
+
+    probe_ct = probe.headers.get("content-type", "")
+    probe_cl_header = probe.headers.get("content-range", "")
+    if probe_cl_header and "/" in probe_cl_header:
+        probe_cl = int(probe_cl_header.split("/")[-1] or 0)
+    else:
+        probe_cl = int(probe.headers.get("content-length", 0))
+    probe_text = probe.content[:512].decode("utf-8", errors="ignore")
+    print(f"[vkmovie/stream] Final probe result: status={probe.status_code}, ct={probe_ct}, cl={probe_cl}")
 
     is_m3u8 = "mpegurl" in probe_ct or probe_text.lstrip().startswith("#EXTM3U")
     is_large = probe_cl > 10 * 1024 * 1024  # > 10MB
@@ -755,7 +777,16 @@ async def vkmovie_stream(url: str, request: Request):
         # Малі файли (сегменти TS, субтитри < 10MB) — завантажуємо повністю
         async with httpx.AsyncClient(timeout=30, follow_redirects=True) as client:
             try:
+                # Try with original headers
                 r = await client.get(url, headers=req_headers)
+                
+                # If okcdn/vkuser and got 400/small response, retry without range!
+                if (("okcdn.ru" in url or "vkuser.net" in url) and 
+                    (r.status_code == 400 or len(r.content) <= 3)):
+                    print(f"[vkmovie/stream] Retrying small file without range header")
+                    no_range_headers = {k: v for k, v in req_headers.items() if k.lower() != "range"}
+                    r = await client.get(url, headers=no_range_headers)
+                    
                 ct = r.headers.get("content-type", "application/octet-stream")
                 content = r.content
 
@@ -783,11 +814,25 @@ async def vkmovie_stream(url: str, request: Request):
 
     # Великі файли (MP4) — стримінг з Range підтримкою
     client2 = httpx.AsyncClient(timeout=300, follow_redirects=True)
+    final_headers = dict(req_headers)
+    
+    # First try the request
     r2 = await client2.send(
-        client2.build_request("GET", url, headers=req_headers),
+        client2.build_request("GET", url, headers=final_headers),
         stream=True
     )
-
+    
+    # If we got 400 from okcdn/vkuser, retry without range header!
+    if (("okcdn.ru" in url or "vkuser.net" in url) and 
+        r2.status_code == 400):
+        print(f"[vkmovie/stream] Retrying large file without range header")
+        await r2.aclose()
+        no_range_headers = {k: v for k, v in req_headers.items() if k.lower() != "range"}
+        r2 = await client2.send(
+            client2.build_request("GET", url, headers=no_range_headers),
+            stream=True
+        )
+        
     resp_headers = {
         "Access-Control-Allow-Origin": "*",
         "Accept-Ranges": "bytes",
