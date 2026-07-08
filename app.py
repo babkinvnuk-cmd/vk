@@ -445,7 +445,7 @@ async def vkvideo_debug(q: str = "anal"):
 
 @app.get("/vkvideo/adult")
 async def vkvideo_adult_search(q: str = "", offset: int = 0, count: int = 50):
-    """Пошук adult відео через старий VK API video.search з adult=1"""
+    """Пошук відео по всіх паблікам з owners.txt"""
     if not q:
         return Response(content='{"error":"no query"}', status_code=400,
                         media_type="application/json", headers={"Access-Control-Allow-Origin": "*"})
@@ -455,52 +455,116 @@ async def vkvideo_adult_search(q: str = "", offset: int = 0, count: int = 50):
         return Response(content='{"error":"no_token"}', status_code=503,
                         media_type="application/json", headers={"Access-Control-Allow-Origin": "*"})
 
-    import urllib.parse
     import json as _json
-    
-    # Используем СТАРЫЙ API video.search с adult=1
-    url = f"{VK_SEARCH_OLD_URL}&q={urllib.parse.quote(q)}&offset={offset}&count={count}&access_token={token}"
-    
-    async with httpx.AsyncClient(timeout=15, follow_redirects=True) as client:
-        r = await client.get(url, headers={
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-            "Referer": "https://vk.com/",
-        })
-    
-    try:
-        data = r.json()
-    except Exception:
-        return Response(content='{"error":"parse"}', status_code=500,
-                        media_type="application/json", headers={"Access-Control-Allow-Origin": "*"})
-    
     results = []
-    items = data.get("response", {}).get("items", [])
-    
-    for v in items:
-        if not v:
-            continue
-        files = v.get("files") or {}
-        results.append({
-            "id": v.get("id"), "owner_id": v.get("owner_id"),
-            "title": v.get("title"), "description": v.get("description", ""),
-            "duration": v.get("duration", 0), "image": v.get("image", []),
-            "date": v.get("date"), "views": v.get("views", 0),
-            "player": v.get("player"),
-            "mp4_2160": files.get("mp4_2160"), "mp4_1440": files.get("mp4_1440"),
-            "mp4_1080": files.get("mp4_1080"), "mp4_720": files.get("mp4_720"),
-            "mp4_480": files.get("mp4_480"), "mp4_360": files.get("mp4_360"),
-            "mp4_240": files.get("mp4_240"),
-            "hls": files.get("hls"), "subtitles": v.get("subtitles") or [],
-        })
-    
-    total_count = data.get("response", {}).get("count", len(results))
-    print(f"[adult] q='{q}' total results={len(results)} (total available={total_count})")
-    
+    existing = set()
+    q_words = [w.lower() for w in q.lower().split() if len(w) > 2]
+
+    all_owners = list(_porn_owners)
+    print(f"[adult] searching q='{q}' across {len(all_owners)} owners")
+
+    async with httpx.AsyncClient(timeout=30, follow_redirects=True) as client:
+        import asyncio
+
+        async def fetch_owner(owner_id):
+            try:
+                vg_url = (
+                    f"https://api.vkvideo.ru/method/video.get"
+                    f"?v=5.264&client_id={VK_CLIENT_ID}"
+                    f"&owner_id={owner_id}&count=200&access_token={token}"
+                )
+                vr = await client.get(vg_url, headers={
+                    "User-Agent": "Mozilla/5.0",
+                    "Referer": "https://vkvideo.ru/"
+                })
+                return vr.json().get("response", {}).get("items", [])
+            except Exception:
+                return []
+
+        tasks = [fetch_owner(oid) for oid in all_owners]
+        all_items_list = await asyncio.gather(*tasks)
+
+        for items in all_items_list:
+            for v in items:
+                title = (v.get("title") or "").lower()
+                if q_words and not any(w in title for w in q_words):
+                    continue
+                key = f"{v.get('owner_id')}_{v.get('id')}"
+                if key in existing:
+                    continue
+                files = v.get("files") or {}
+                existing.add(key)
+                results.append({
+                    "id": v.get("id"), "owner_id": v.get("owner_id"),
+                    "title": v.get("title"), "description": v.get("description", ""),
+                    "duration": v.get("duration", 0), "image": v.get("image", []),
+                    "date": v.get("date"), "views": v.get("views", 0),
+                    "player": v.get("player"),
+                    "mp4_2160": files.get("mp4_2160"), "mp4_1440": files.get("mp4_1440"),
+                    "mp4_1080": files.get("mp4_1080"), "mp4_720": files.get("mp4_720"),
+                    "mp4_480": files.get("mp4_480"), "mp4_360": files.get("mp4_360"),
+                    "mp4_240": files.get("mp4_240"),
+                    "hls": files.get("hls"), "subtitles": v.get("subtitles") or [],
+                })
+
+    print(f"[adult] q='{q}' total results={len(results)}")
+
+    paginated = results[offset:offset + count]
+
     return Response(
-        content=_json.dumps({"items": results, "count": total_count, "offset": offset}, ensure_ascii=False),
+        content=_json.dumps({"items": paginated, "count": len(results), "offset": offset}, ensure_ascii=False),
         media_type="application/json",
         headers={"Access-Control-Allow-Origin": "*"}
     )
+
+
+@app.get("/vkvideo/upgrade")
+async def vkvideo_upgrade_urls(owner_id: int, video_id: int):
+    """Получает рабочие URL для конкретного видео (с subId)"""
+    token = await _get_vk_token()
+    if not token:
+        return Response(content='{"error":"no_token"}', status_code=503,
+                        media_type="application/json", headers={"Access-Control-Allow-Origin": "*"})
+    
+    import json as _json
+    
+    async with httpx.AsyncClient(timeout=15, follow_redirects=True) as client:
+        try:
+            url = (
+                f"https://api.vkvideo.ru/method/video.get"
+                f"?v=5.264&client_id={VK_CLIENT_ID}"
+                f"&videos={owner_id}_{video_id}&access_token={token}"
+            )
+            r = await client.get(url, headers={
+                "User-Agent": "Mozilla/5.0",
+                "Referer": "https://vkvideo.ru/"
+            })
+            data = r.json()
+            items = data.get("response", {}).get("items", [])
+            
+            if not items:
+                return Response(content='{"error":"not found"}', status_code=404,
+                              media_type="application/json", headers={"Access-Control-Allow-Origin": "*"})
+            
+            v = items[0]
+            files = v.get("files") or {}
+            
+            result = {
+                "mp4_2160": files.get("mp4_2160"), "mp4_1440": files.get("mp4_1440"),
+                "mp4_1080": files.get("mp4_1080"), "mp4_720": files.get("mp4_720"),
+                "mp4_480": files.get("mp4_480"), "mp4_360": files.get("mp4_360"),
+                "mp4_240": files.get("mp4_240"),
+                "hls": files.get("hls"), "subtitles": v.get("subtitles") or [],
+            }
+            
+            return Response(
+                content=_json.dumps(result, ensure_ascii=False),
+                media_type="application/json",
+                headers={"Access-Control-Allow-Origin": "*"}
+            )
+        except Exception as e:
+            return Response(content=_json.dumps({"error": str(e)}), status_code=500,
+                          media_type="application/json", headers={"Access-Control-Allow-Origin": "*"})
 
 
 @app.get("/vkmovie/search")
