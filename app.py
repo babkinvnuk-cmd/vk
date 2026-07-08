@@ -372,36 +372,35 @@ async def vkvideo_search(q: str = "", offset: int = 0, count: int = 50):
 
 @app.get("/vkvideo/debug")
 async def vkvideo_debug(q: str = "anal fuck"):
-    """Дебаг - дивимось що повертає al_video.php"""
+    """Дебаг - дивимось що повертає vkvideo.ru/search"""
     import urllib.parse as up
-    search_data = up.urlencode({
-        'act': 'load_videos_silent',
-        'al': 1,
-        'offset': 0,
-        'oid': '',
-        'q': q,
-        'section': 'search',
-    })
     async with httpx.AsyncClient(timeout=15, follow_redirects=True) as client:
-        sr = await client.post(
-            'https://vk.com/al_video.php',
-            content=search_data.encode(),
-            headers={
-                'Content-Type': 'application/x-www-form-urlencoded',
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124.0.0.0 Safari/537.36',
-                'X-Requested-With': 'XMLHttpRequest',
-                'Referer': 'https://vk.com/video',
-                'Origin': 'https://vk.com',
-            }
+        # Пробуємо звичайний веб-пошук
+        url = f"https://vkvideo.ru/search?q={up.quote(q)}"
+        r = await client.get(url, headers={
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124.0.0.0 Safari/537.36',
+            'Accept': 'text/html,application/xhtml+xml',
+            'Accept-Language': 'ru-RU,ru;q=0.9',
+        })
+        html = r.text
+        
+        # Шукаємо video IDs в HTML
+        vk_ids = re.findall(r'video(-?\d+)_(\d+)', html)
+        
+        # Шукаємо JSON з відео даними
+        json_blocks = re.findall(r'"id":\s*(\d+).*?"owner_id":\s*(-?\d+)', html[:5000])
+        
+        return Response(
+            content=json.dumps({
+                "status": r.status_code,
+                "url": url,
+                "video_ids_found": len(vk_ids),
+                "sample_ids": vk_ids[:5],
+                "html_snippet": html[:2000],
+            }, ensure_ascii=False),
+            media_type="application/json",
+            headers={"Access-Control-Allow-Origin": "*"}
         )
-    return Response(
-        content=json.dumps({
-            "status": sr.status_code,
-            "raw": sr.text[:3000]
-        }, ensure_ascii=False),
-        media_type="application/json",
-        headers={"Access-Control-Allow-Origin": "*"}
-    )
 
 
 @app.get("/vkvideo/adult")
