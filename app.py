@@ -246,6 +246,29 @@ async def _get_vk_token() -> str:
     return token
 
 
+@app.get("/vkvideo/image")
+async def vkvideo_image_proxy(url: str):
+    """Проксі для VK зображень щоб обійти блокування .ru доменів"""
+    if not url:
+        return Response(content="no url", status_code=400)
+    
+    async with httpx.AsyncClient(timeout=10, follow_redirects=True) as client:
+        try:
+            r = await client.get(url, headers={
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+                "Referer": "https://vk.com/",
+            })
+            
+            return Response(
+                content=r.content,
+                status_code=r.status_code,
+                media_type=r.headers.get("content-type", "image/jpeg"),
+                headers={"Access-Control-Allow-Origin": "*"}
+            )
+        except Exception as e:
+            return Response(content=f"error: {e}", status_code=500)
+
+
 @app.get("/vkvideo/search")
 async def vkvideo_search(q: str, offset: int = 0, count: int = 50):
     """Пошук відео VK Video з adult контентом"""
