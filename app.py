@@ -589,13 +589,23 @@ async def vkmovie_search(q: str, kp: str = "", year: str = ""):
 
 
 @app.api_route("/vkmovie/stream", methods=["GET", "HEAD"])
-async def vkmovie_stream(url: str, request: Request):
+async def vkmovie_stream(request: Request):
     """Проксує VK відео/сегменти через HF Space (обхід блокування .ru доменів)"""
-    # Clean the URL: strip whitespace and remove any backticks/quotes
-    url = url.strip().strip('`').strip('"').strip("'").strip()
-    print(f"[vkmovie/stream] Request: method={request.method}, url={repr(url)}")
+    # Manual parsing like parse_proxy_params to handle url correctly
+    raw_query = str(request.url.query)
+    url = None
+    if raw_query.startswith("url="):
+        url_part = raw_query[4:]
+        if "&" in url_part:
+            url_part = url_part.split("&")[0]
+        url = unquote(url_part)
+        
     if not url:
         return Response(content="no url", status_code=400)
+        
+    # Clean the URL: strip whitespace and remove any backticks/quotes
+    url = url.strip().strip('`').strip('"').strip("'").strip()
+    print(f"[vkmovie/stream] Request: method={request.method}, url={repr(url)}, raw query={repr(raw_query)}")
 
     parsed_url = urlparse(url)
     is_m3u8_url = parsed_url.path.lower().endswith(".m3u8")
