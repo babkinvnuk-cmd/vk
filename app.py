@@ -613,7 +613,8 @@ async def vkmovie_stream(request: Request):
     print(f"[vkmovie/stream] Request: method={request.method}, url={repr(url)}, raw query={repr(raw_query)}")
 
     parsed_incoming = urlparse(url)
-    if parsed_incoming.netloc and parsed_incoming.netloc.endswith("okcdn.ru"):
+    # Redirect okcdn.ru AND vkuser.net to HF Space (both are blocked on Render)
+    if parsed_incoming.netloc and (parsed_incoming.netloc.endswith("okcdn.ru") or parsed_incoming.netloc.endswith("vkuser.net")):
         if OKCDN_UPSTREAM:
             return RedirectResponse(
                 url=f"{OKCDN_UPSTREAM}/vkmovie/stream?url={quote(url, safe='')}",
