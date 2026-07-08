@@ -691,10 +691,7 @@ async def vkmovie_stream(request: Request):
         # First try to probe with range if present, or range=0-512
         try:
             probe_headers = dict(req_headers)
-            if range_header:
-                probe_headers["range"] = range_header
-            else:
-                probe_headers["range"] = "bytes=0-511"
+            probe_headers["range"] = "bytes=0-511"
             print(f"[vkmovie/stream] Probing with range: {url}, headers={probe_headers}")
             probe = await client.get(url, headers=probe_headers)
             print(f"[vkmovie/stream] Probe response 1: status={probe.status_code}, headers={dict(probe.headers)}, content={repr(probe.content)}")
