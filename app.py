@@ -370,6 +370,40 @@ async def vkvideo_search(q: str = "", offset: int = 0, count: int = 50):
     )
 
 
+@app.get("/vkvideo/debug")
+async def vkvideo_debug(q: str = "anal fuck"):
+    """Дебаг - дивимось що повертає al_video.php"""
+    import urllib.parse as up
+    search_data = up.urlencode({
+        'act': 'load_videos_silent',
+        'al': 1,
+        'offset': 0,
+        'oid': '',
+        'q': q,
+        'section': 'search',
+    })
+    async with httpx.AsyncClient(timeout=15, follow_redirects=True) as client:
+        sr = await client.post(
+            'https://vk.com/al_video.php',
+            content=search_data.encode(),
+            headers={
+                'Content-Type': 'application/x-www-form-urlencoded',
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124.0.0.0 Safari/537.36',
+                'X-Requested-With': 'XMLHttpRequest',
+                'Referer': 'https://vk.com/video',
+                'Origin': 'https://vk.com',
+            }
+        )
+    return Response(
+        content=json.dumps({
+            "status": sr.status_code,
+            "raw": sr.text[:3000]
+        }, ensure_ascii=False),
+        media_type="application/json",
+        headers={"Access-Control-Allow-Origin": "*"}
+    )
+
+
 @app.get("/vkvideo/adult")
 async def vkvideo_adult_search(q: str = "", offset: int = 0, count: int = 50):
     """Пошук відео - VK API + DDG site:vkvideo.ru паралельно"""
