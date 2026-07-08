@@ -423,49 +423,75 @@ async def vkvideo_adult_search(q: str = "", offset: int = 0, count: int = 50):
         except Exception as e:
             print(f"[vkvideo/adult] VK API error: {e}")
 
-        # 2. Bing site:vkvideo.ru - знаходить те що VK приховує
+        # 2. Пошук через внутрішній VK API (той самий що використовує сайт vk.com)
+        # Цей метод не фільтрує adult контент
         try:
-            bing_url = f"https://www.bing.com/search?q={urllib.parse.quote(q + ' site:vkvideo.ru')}&count=50&setlang=ru&cc=ru&safeSearch=Off"
-            br = await client.get(bing_url, headers={
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124.0.0.0 Safari/537.36",
-                "Accept": "text/html,application/xhtml+xml",
-                "Accept-Language": "ru-RU,ru;q=0.9,en;q=0.8",
+            import urllib.parse as up
+            search_data = up.urlencode({
+                'act': 'load_videos_silent',
+                'al': 1,
+                'offset': offset,
+                'oid': '',
+                'q': q,
+                'section': 'search',
             })
-            html = br.text
-            vk_ids = re.findall(r'vkvideo\.ru/video(-?\d+)_(\d+)', html)
-            vk_ids += re.findall(r'vk\.com/video(-?\d+)_(\d+)', html)
-            vk_ids = list(dict.fromkeys(vk_ids))
-            print(f"[vkvideo/adult] Bing found {len(vk_ids)} IDs for '{q}'")
-
-            for owner_id, video_id in vk_ids[:30]:
-                key = f"{owner_id}_{video_id}"
-                if key in existing:
-                    continue
-                try:
-                    vg_url = (
-                        f"https://api.vkvideo.ru/method/video.get"
-                        f"?v=5.264&client_id={VK_CLIENT_ID}"
-                        f"&videos={owner_id}_{video_id}&access_token={token}"
-                    )
-                    vr = await client.get(vg_url, headers={"User-Agent": "Mozilla/5.0", "Referer": "https://vkvideo.ru/"})
-                    vdata = vr.json()
-                    for v in vdata.get("response", {}).get("items", []):
-                        files = v.get("files") or {}
-                        existing.add(key)
-                        results.append({
-                            "id": v.get("id"), "owner_id": v.get("owner_id"),
-                            "title": v.get("title"), "description": v.get("description", ""),
-                            "duration": v.get("duration", 0), "image": v.get("image", []),
-                            "date": v.get("date"), "views": v.get("views", 0),
-                            "player": v.get("player"),
-                            "mp4_1080": files.get("mp4_1080"), "mp4_720": files.get("mp4_720"),
-                            "mp4_480": files.get("mp4_480"), "mp4_360": files.get("mp4_360"),
-                            "hls": files.get("hls"), "subtitles": v.get("subtitles") or [],
-                        })
-                except Exception:
-                    continue
+            sr = await client.post(
+                'https://vk.com/al_video.php',
+                content=search_data.encode(),
+                headers={
+                    'Content-Type': 'application/x-www-form-urlencoded',
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124.0.0.0 Safari/537.36',
+                    'X-Requested-With': 'XMLHttpRequest',
+                    'Referer': 'https://vk.com/video',
+                    'Origin': 'https://vk.com',
+                }
+            )
+            # Відповідь: payload[0] містить {"search": {"list": [[owner_id, video_id], ...]}}
+            raw = sr.text
+            # Парсимо JSON після <!>
+            json_match = re.search(r'<!>(.*)', raw, re.DOTALL)
+            if json_match:
+                payload = json.loads(json_match.group(1))
+                video_list = []
+                if isinstance(payload, list) and len(payload) > 0:
+                    section_data = payload[0]
+                    if isinstance(section_data, dict):
+                        video_list = section_data.get('search', {}).get('list', [])
+                
+                print(f"[vkvideo/adult] al_video found {len(video_list)} IDs for '{q}'")
+                
+                for video_item in video_list[:30]:
+                    if len(video_item) < 2:
+                        continue
+                    owner_id, video_id = str(video_item[0]), str(video_item[1])
+                    key = f"{owner_id}_{video_id}"
+                    if key in existing:
+                        continue
+                    try:
+                        vg_url = (
+                            f"https://api.vkvideo.ru/method/video.get"
+                            f"?v=5.264&client_id={VK_CLIENT_ID}"
+                            f"&videos={owner_id}_{video_id}&access_token={token}"
+                        )
+                        vr = await client.get(vg_url, headers={"User-Agent": "Mozilla/5.0", "Referer": "https://vkvideo.ru/"})
+                        vdata = vr.json()
+                        for v in vdata.get("response", {}).get("items", []):
+                            files = v.get("files") or {}
+                            existing.add(key)
+                            results.append({
+                                "id": v.get("id"), "owner_id": v.get("owner_id"),
+                                "title": v.get("title"), "description": v.get("description", ""),
+                                "duration": v.get("duration", 0), "image": v.get("image", []),
+                                "date": v.get("date"), "views": v.get("views", 0),
+                                "player": v.get("player"),
+                                "mp4_1080": files.get("mp4_1080"), "mp4_720": files.get("mp4_720"),
+                                "mp4_480": files.get("mp4_480"), "mp4_360": files.get("mp4_360"),
+                                "hls": files.get("hls"), "subtitles": v.get("subtitles") or [],
+                            })
+                    except Exception:
+                        continue
         except Exception as e:
-            print(f"[vkvideo/adult] Bing error: {e}")
+            print(f"[vkvideo/adult] al_video error: {e}")
 
     import json
     return Response(
