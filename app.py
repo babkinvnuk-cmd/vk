@@ -840,7 +840,7 @@ async def _extract_video_urls_from_player(player_url: str) -> dict:
                 try:
                     url = url.encode('utf-8').decode('unicode_escape')
                     # Убираем лишние escape символы
-                    url = url.replace('\/', '/')
+                    url = url.replace(r'\/', '/')
                 except:
                     pass
                 
@@ -876,7 +876,7 @@ async def _extract_video_urls_from_player(player_url: str) -> dict:
                         url = url_match.group(1)
                         # Декодируем escape последовательности
                         url = url.encode('utf-8').decode('unicode_escape')
-                        url = url.replace('\/', '/')
+                        url = url.replace(r'\/', '/')
                         if ('subId=' in url or 'sig=' in url) and ('vkuser.net' in url or 'okcdn.ru' in url):
                             # Определяем качество
                             quality_match = re.search(r'"url(\d+)"', obj_text)
@@ -895,7 +895,7 @@ async def _extract_video_urls_from_player(player_url: str) -> dict:
                 for quality, url in matches:
                     try:
                         decoded_url = url.encode('utf-8').decode('unicode_escape')
-                        decoded_url = decoded_url.replace('\/', '/')
+                        decoded_url = decoded_url.replace(r'\/', '/')
                         if 'subId=' in decoded_url or 'sig=' in decoded_url or 'okcdn.ru' in decoded_url or 'vkuser.net' in decoded_url:
                             urls[f"mp4_{quality}"] = decoded_url
                     except Exception:
@@ -907,7 +907,7 @@ async def _extract_video_urls_from_player(player_url: str) -> dict:
                 for type_id, url in type_url_matches:
                     try:
                         decoded_url = url.encode('utf-8').decode('unicode_escape')
-                        decoded_url = decoded_url.replace('\/', '/')
+                        decoded_url = decoded_url.replace(r'\/', '/')
                         if 'okcdn.ru' in decoded_url or 'vkuser.net' in decoded_url:
                             # type маппинг: 4=720p, 22=1080p и т.д.
                             quality_map = {
