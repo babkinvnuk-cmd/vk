@@ -602,43 +602,23 @@ async def vkmovie_stream(request: Request):
     if not url:
         return Response(content="no url", status_code=400)
         
-    url = url.strip().strip('`').strip('"').strip("'").strip()
+    url = url.strip().replace("`", "").strip().strip('"').strip("'").strip()
     print(f"[vkmovie/stream] Request: method={request.method}, url={repr(url)}, raw query={repr(raw_query)}")
 
     parsed_url = urlparse(url)
     is_m3u8_url = parsed_url.path.lower().endswith(".m3u8")
 
-    referer = "https://vk.com/"
-    origin = "https://vk.com"
-    hostname = parsed_url.hostname or ""
-
-    if "vkvideo.ru" in url or hostname.endswith("vkvideo.ru"):
-        referer = "https://vkvideo.ru/"
-        origin = "https://vkvideo.ru"
-    elif "okcdn.ru" in url or hostname.endswith("okcdn.ru") or "ok.ru" in url or hostname.endswith("ok.ru"):
-        referer = "https://ok.ru/"
-        origin = "https://ok.ru"
-    elif "vkuser.net" in url or hostname.endswith("vkuser.net"):
-        referer = "https://vk.com/"
-        origin = "https://vk.com"
-
-    referer = referer.strip().strip('`').strip('"').strip("'").strip()
-    origin = origin.strip().strip('`').strip('"').strip("'").strip()
+    referer = "https://vkvideo.ru/"
+    origin = "https://vkvideo.ru"
+    referer = referer.strip().replace("`", "").strip().strip('"').strip("'").strip()
+    origin = origin.strip().replace("`", "").strip().strip('"').strip("'").strip()
 
     print(f"[vkmovie/stream] Using referer: {repr(referer)}, origin: {repr(origin)}")
 
     req_headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124.0.0.0 Safari/537.36",
         "Referer": referer,
         "Origin": origin,
-        "Accept": "application/vnd.apple.mpegurl,application/x-mpegURL,*/*",
-        "Accept-Language": "ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7",
-        "Connection": "keep-alive",
-        "Sec-Fetch-Dest": "video",
-        "Sec-Fetch-Mode": "cors",
-        "Sec-Fetch-Site": "cross-site",
-        "Pragma": "no-cache",
-        "Cache-Control": "no-cache",
     }
     
     hf = str(request.base_url).rstrip("/").replace("http://", "https://")
