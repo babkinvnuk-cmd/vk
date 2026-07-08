@@ -270,8 +270,12 @@ async def vkvideo_image_proxy(url: str):
 
 
 @app.get("/vkvideo/search")
-async def vkvideo_search(q: str, offset: int = 0, count: int = 50):
+async def vkvideo_search(q: str = "", offset: int = 0, count: int = 50):
     """Пошук відео VK Video з adult контентом"""
+    if not q:
+        return Response(content='{"error":"no query"}', status_code=400,
+                        media_type="application/json", headers={"Access-Control-Allow-Origin": "*"})
+    
     token = await _get_vk_token()
     if not token:
         return Response(content='{"error":"no_token"}', status_code=503,
