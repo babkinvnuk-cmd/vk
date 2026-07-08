@@ -534,13 +534,72 @@ async def vkvideo_upgrade_urls(owner_id: int, video_id: int):
     
     import json as _json
     
+    print(f"[upgrade] START for {owner_id}_{video_id}")
+    
+    # НОВЫЙ ПОДХОД: пробуем получить URL через video.get с другим client_id
+    # VK Video app использует client_id который возвращает URLs с subId
+    token = await _get_vk_token()
+    if not token:
+        print(f"[upgrade] FAILED: no VK token")
+        return Response(content='{"error":"no_token"}', status_code=503,
+                        media_type="application/json", headers={"Access-Control-Allow-Origin": "*"})
+    
+    # Пробуем video.get через VKVIDEO API (не обычный VK API)
+    async with httpx.AsyncClient(timeout=15, follow_redirects=True) as client:
+        try:
+            # Используем vkvideo.ru API endpoint
+            url = (
+                f"https://api.vkvideo.ru/method/video.get"
+                f"?v=5.264&client_id={VK_CLIENT_ID}"
+                f"&videos={owner_id}_{video_id}&access_token={token}"
+            )
+            print(f"[upgrade] trying vkvideo.ru API: {url}")
+            r = await client.get(url, headers={
+                "User-Agent": "Mozilla/5.0",
+                "Referer": "https://vkvideo.ru/"
+            })
+            data = r.json()
+            items = data.get("response", {}).get("items", [])
+            
+            if items:
+                v = items[0]
+                files = v.get("files") or {}
+                
+                result = {
+                    "mp4_2160": files.get("mp4_2160"), "mp4_1440": files.get("mp4_1440"),
+                    "mp4_1080": files.get("mp4_1080"), "mp4_720": files.get("mp4_720"),
+                    "mp4_480": files.get("mp4_480"), "mp4_360": files.get("mp4_360"),
+                    "mp4_240": files.get("mp4_240"),
+                    "hls": files.get("hls"), "subtitles": v.get("subtitles") or [],
+                }
+                
+                urls_count = sum(1 for v in result.values() if v and isinstance(v, str))
+                subid_count = sum(1 for v in result.values() if v and isinstance(v, str) and 'subId=' in v)
+                print(f"[upgrade] vkvideo.ru API: returned {urls_count} URLs ({subid_count} with subId)")
+                
+                # Если есть хоть один URL с subId - возвращаем результат
+                if subid_count > 0:
+                    return Response(
+                        content=_json.dumps(result, ensure_ascii=False),
+                        media_type="application/json",
+                        headers={"Access-Control-Allow-Origin": "*"}
+                    )
+                
+                # Если URLs без subId - пытаемся player HTML
+                print(f"[upgrade] no URLs with subId, trying player HTML...")
+            else:
+                print(f"[upgrade] vkvideo.ru API returned no items")
+                
+        except Exception as e:
+            import traceback
+            print(f"[upgrade] vkvideo.ru API error: {e}")
+            print(f"[upgrade] traceback: {traceback.format_exc()}")
+    
     # Формируем URL player страницы
     player_url = f"https://vk.com/video_ext.php?oid={owner_id}&id={video_id}&hd=2"
-    
-    print(f"[upgrade] START for {owner_id}_{video_id}")
     print(f"[upgrade] player URL: {player_url}")
     
-    # Пробуем извлечь URL из player
+    # Пробуем извлечь URL из player (скорее всего не сработает)
     player_files = await _extract_video_urls_from_player(player_url)
     
     if player_files and len(player_files) > 0:
@@ -554,59 +613,9 @@ async def vkvideo_upgrade_urls(owner_id: int, video_id: int):
             headers={"Access-Control-Allow-Origin": "*"}
         )
     
-    # Fallback: пробуем через video.get API
-    print(f"[upgrade] player HTML extraction FAILED, trying video.get API fallback")
-    token = await _get_vk_token()
-    if not token:
-        print(f"[upgrade] FAILED: no VK token")
-        return Response(content='{"error":"no_token"}', status_code=503,
-                        media_type="application/json", headers={"Access-Control-Allow-Origin": "*"})
-    
-    async with httpx.AsyncClient(timeout=15, follow_redirects=True) as client:
-        try:
-            url = (
-                f"https://api.vkvideo.ru/method/video.get"
-                f"?v=5.264&client_id={VK_CLIENT_ID}"
-                f"&videos={owner_id}_{video_id}&access_token={token}"
-            )
-            r = await client.get(url, headers={
-                "User-Agent": "Mozilla/5.0",
-                "Referer": "https://vkvideo.ru/"
-            })
-            data = r.json()
-            items = data.get("response", {}).get("items", [])
-            
-            if not items:
-                print(f"[upgrade] FAILED: video.get returned no items")
-                return Response(content='{"error":"not found"}', status_code=404,
-                              media_type="application/json", headers={"Access-Control-Allow-Origin": "*"})
-            
-            v = items[0]
-            files = v.get("files") or {}
-            
-            result = {
-                "mp4_2160": files.get("mp4_2160"), "mp4_1440": files.get("mp4_1440"),
-                "mp4_1080": files.get("mp4_1080"), "mp4_720": files.get("mp4_720"),
-                "mp4_480": files.get("mp4_480"), "mp4_360": files.get("mp4_360"),
-                "mp4_240": files.get("mp4_240"),
-                "hls": files.get("hls"), "subtitles": v.get("subtitles") or [],
-            }
-            
-            urls_count = sum(1 for v in result.values() if v and isinstance(v, str))
-            subid_count = sum(1 for v in result.values() if v and isinstance(v, str) and 'subId=' in v)
-            print(f"[upgrade] FALLBACK video.get: returned {urls_count} URLs ({subid_count} with subId)")
-            
-            return Response(
-                content=_json.dumps(result, ensure_ascii=False),
-                media_type="application/json",
-                headers={"Access-Control-Allow-Origin": "*"}
-            )
-        except Exception as e:
-            import traceback
-            print(f"[upgrade] EXCEPTION: {e}")
-            print(f"[upgrade] traceback: {traceback.format_exc()}")
-            return Response(content=_json.dumps({"error": str(e)}), status_code=500,
-                          media_type="application/json", headers={"Access-Control-Allow-Origin": "*"})
+    print(f"[upgrade] FAILED: no working URLs found")
+    return Response(content='{"error":"no working urls"}', status_code=404,
+                  media_type="application/json", headers={"Access-Control-Allow-Origin": "*"})
 
 
 @app.get("/vkmovie/search")
