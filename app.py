@@ -545,17 +545,21 @@ async def vkvideo_upgrade_urls(owner_id: int, video_id: int):
     async with httpx.AsyncClient(timeout=15, follow_redirects=True) as client:
         # МЕТОД 1: video.getForPlay - специальный API для получения URL для воспроизведения
         try:
-            for_play_url = (
-                f"https://api.vkvideo.ru/method/video.getForPlay"
-                f"?v=5.282&client_id={VK_CLIENT_ID}"
-                f"&videos={owner_id}_{video_id}&access_token={token}"
+            # Пробуем через POST с form data (как делает официальный клиент)
+            for_play_url = f"https://api.vkvideo.ru/method/video.getForPlay?v=5.282&client_id={VK_CLIENT_ID}"
+            post_data = f"videos={owner_id}_{video_id}&access_token={token}"
+            
+            print(f"[upgrade] METHOD 1: trying video.getForPlay (POST)")
+            r = await client.post(
+                for_play_url,
+                content=post_data.encode(),
+                headers={
+                    "Content-Type": "application/x-www-form-urlencoded",
+                    "User-Agent": "Mozilla/5.0",
+                    "Referer": "https://vkvideo.ru/",
+                    "Origin": "https://vkvideo.ru"
+                }
             )
-            print(f"[upgrade] METHOD 1: trying video.getForPlay")
-            r = await client.get(for_play_url, headers={
-                "User-Agent": "Mozilla/5.0",
-                "Referer": "https://vkvideo.ru/",
-                "Origin": "https://vkvideo.ru"
-            })
             data = r.json()
             
             if 'response' in data and 'items' in data['response'] and len(data['response']['items']) > 0:
