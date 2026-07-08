@@ -605,18 +605,13 @@ async def vkmovie_stream(request: Request):
     url = url.strip().replace("`", "").strip().strip('"').strip("'").strip()
     print(f"[vkmovie/stream] Request: method={request.method}, url={repr(url)}, raw query={repr(raw_query)}")
 
-    parsed_url = urlparse(url)
-    is_m3u8_url = parsed_url.path.lower().endswith(".m3u8")
-
     referer = "https://vkvideo.ru/"
     origin = "https://vkvideo.ru"
-    referer = referer.strip().replace("`", "").strip().strip('"').strip("'").strip()
-    origin = origin.strip().replace("`", "").strip().strip('"').strip("'").strip()
 
     print(f"[vkmovie/stream] Using referer: {repr(referer)}, origin: {repr(origin)}")
 
     req_headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124.0.0.0 Safari/537.36",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
         "Referer": referer,
         "Origin": origin,
     }
@@ -649,34 +644,6 @@ async def vkmovie_stream(request: Request):
                 out.append(rewrite_seg(stripped))
         return "\n".join(out)
 
-    # If it's definitely an m3u8 (from URL path), handle first without probing
-    if is_m3u8_url:
-        if request.method == "HEAD":
-            return Response(
-                content=b"",
-                status_code=200,
-                media_type="application/vnd.apple.mpegurl",
-                headers={"Access-Control-Allow-Origin": "*"}
-            )
-        else:
-            async with httpx.AsyncClient(timeout=15, follow_redirects=True) as client:
-                try:
-                    m3u8_headers = {k: v for k, v in req_headers.items() if k.lower() != "range"}
-                    print(f"[vkmovie/stream] Fetching m3u8 directly: {url} with headers={m3u8_headers}")
-                    r = await client.get(url, headers=m3u8_headers)
-                    print(f"[vkmovie/stream] m3u8 response: status={r.status_code}, len={len(r.text)}, content={repr(r.content)}")
-                    text = r.text
-                except Exception as e:
-                    print(f"[vkmovie/stream] m3u8 error: {repr(e)}")
-                    return Response(content=f"error: {e}", status_code=500)
-            return Response(
-                content=rewrite_m3u8_content(text),
-                status_code=r.status_code,
-                media_type="application/vnd.apple.mpegurl",
-                headers={"Access-Control-Allow-Origin": "*"}
-            )
-
-    # Not a clear m3u8 from URL path, so probe first
     range_header = request.headers.get("range")
     if range_header:
         req_headers["range"] = range_header
@@ -688,33 +655,15 @@ async def vkmovie_stream(request: Request):
     probe_text = ""
 
     async with httpx.AsyncClient(timeout=15, follow_redirects=True) as client:
-        # First try to probe with range if present, or range=0-512
         try:
             probe_headers = dict(req_headers)
             probe_headers["range"] = "bytes=0-511"
             print(f"[vkmovie/stream] Probing with range: {url}, headers={probe_headers}")
             probe = await client.get(url, headers=probe_headers)
             print(f"[vkmovie/stream] Probe response 1: status={probe.status_code}, headers={dict(probe.headers)}, content={repr(probe.content)}")
-            
-            # If we got a 400 error and it's okcdn/vkuser, try again WITHOUT range header!
-            if (("okcdn.ru" in url or "vkuser.net" in url) and 
-                (probe.status_code == 400 or len(probe.content) <= 3)):
-                print(f"[vkmovie/stream] Got 400/small response, retrying WITHOUT range header")
-                no_range_headers = {k: v for k, v in req_headers.items() if k.lower() != "range"}
-                probe = await client.get(url, headers=no_range_headers)
-                print(f"[vkmovie/stream] Probe response 2: status={probe.status_code}, headers={dict(probe.headers)}, content={repr(probe.content)}")
-                
         except Exception as e:
             print(f"[vkmovie/stream] Probe error: {repr(e)}")
-            # Try without range header as fallback
-            try:
-                print(f"[vkmovie/stream] Retrying probe without range")
-                no_range_headers = {k: v for k, v in req_headers.items() if k.lower() != "range"}
-                probe = await client.get(url, headers=no_range_headers)
-                print(f"[vkmovie/stream] Probe response retry: status={probe.status_code}, headers={dict(probe.headers)}, content={repr(probe.content)}")
-            except Exception as e2:
-                print(f"[vkmovie/stream] Probe retry error: {repr(e2)}")
-                return Response(content=f"error: {e2}", status_code=500)
+            return Response(content=f"error: {e}", status_code=500)
 
     probe_ct = probe.headers.get("content-type", "")
     probe_cl_header = probe.headers.get("content-range", "")
@@ -725,7 +674,9 @@ async def vkmovie_stream(request: Request):
     probe_text = probe.content[:512].decode("utf-8", errors="ignore")
     print(f"[vkmovie/stream] Final probe result: status={probe.status_code}, ct={probe_ct}, cl={probe_cl}, content={repr(probe.content)}")
 
-    is_m3u8 = "mpegurl" in probe_ct or probe_text.lstrip().startswith("#EXTM3U")
+    parsed_url = urlparse(url)
+    is_m3u8_url = parsed_url.path.lower().endswith(".m3u8")
+    is_m3u8 = "mpegurl" in probe_ct or probe_text.lstrip().startswith("#EXTM3U") or is_m3u8_url
     is_large = probe_cl > 10 * 1024 * 1024  # > 10MB
 
     if request.method == "HEAD":
@@ -777,16 +728,7 @@ async def vkmovie_stream(request: Request):
         # Малі файли (сегменти TS, субтитри < 10MB) — завантажуємо повністю
         async with httpx.AsyncClient(timeout=30, follow_redirects=True) as client:
             try:
-                # Try with original headers
                 r = await client.get(url, headers=req_headers)
-                
-                # If okcdn/vkuser and got 400/small response, retry without range!
-                if (("okcdn.ru" in url or "vkuser.net" in url) and 
-                    (r.status_code == 400 or len(r.content) <= 3)):
-                    print(f"[vkmovie/stream] Retrying small file without range header")
-                    no_range_headers = {k: v for k, v in req_headers.items() if k.lower() != "range"}
-                    r = await client.get(url, headers=no_range_headers)
-                    
                 ct = r.headers.get("content-type", "application/octet-stream")
                 content = r.content
 
@@ -815,23 +757,11 @@ async def vkmovie_stream(request: Request):
     # Великі файли (MP4) — стримінг з Range підтримкою
     client2 = httpx.AsyncClient(timeout=300, follow_redirects=True)
     final_headers = dict(req_headers)
-    
-    # First try the request
+
     r2 = await client2.send(
         client2.build_request("GET", url, headers=final_headers),
         stream=True
     )
-    
-    # If we got 400 from okcdn/vkuser, retry without range header!
-    if (("okcdn.ru" in url or "vkuser.net" in url) and 
-        r2.status_code == 400):
-        print(f"[vkmovie/stream] Retrying large file without range header")
-        await r2.aclose()
-        no_range_headers = {k: v for k, v in req_headers.items() if k.lower() != "range"}
-        r2 = await client2.send(
-            client2.build_request("GET", url, headers=no_range_headers),
-            stream=True
-        )
         
     resp_headers = {
         "Access-Control-Allow-Origin": "*",
