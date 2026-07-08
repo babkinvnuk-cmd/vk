@@ -697,26 +697,35 @@ async def _extract_video_urls_from_player(player_url: str) -> dict:
             
             print(f"[player] fetched {len(html)} bytes from {player_url}")
             
+            # Ищем все <script> теги
+            script_tags = re.findall(r'<script[^>]*>(.*?)</script>', html, re.DOTALL)
+            print(f"[player] DEBUG found {len(script_tags)} script tags")
+            
             # Ищем window.vk JavaScript объект
             vk_data_match = re.search(r'window\.vk\s*=\s*Object\.assign\(window\.vk\s*\|\|\s*\{\},\s*(\{.+?\})\s*\);', html, re.DOTALL)
             if vk_data_match:
                 vk_json_text = vk_data_match.group(1)
                 print(f"[player] DEBUG found window.vk object, length={len(vk_json_text)}")
-                # Пытаемся найти URLs внутри
-                vk_urls_in_json = re.findall(r'https?://[^"\']+(?:vkuser\.net|okcdn\.ru)[^"\']+', vk_json_text)
-                if vk_urls_in_json:
-                    print(f"[player] DEBUG found {len(vk_urls_in_json)} URLs in window.vk")
-                    for i, u in enumerate(vk_urls_in_json[:3]):
-                        print(f"[player] DEBUG window.vk URL {i+1}: {u[:150]}")
-                else:
-                    print(f"[player] DEBUG no CDN URLs found in window.vk")
-                    # Выводим кусок JSON для анализа
-                    print(f"[player] DEBUG window.vk sample: {vk_json_text[:500]}")
-            else:
-                print(f"[player] DEBUG window.vk object NOT found")
             
-            # DEBUG: поиск различных паттернов URL в HTML
-            # 1. Ищем все строки содержащие vkuser.net или okcdn.ru
+            # Ищем любые упоминания okcdn или vkuser в <script> тегах
+            for i, script_content in enumerate(script_tags[:10]):  # первые 10 скриптов
+                if 'okcdn' in script_content or 'vkuser' in script_content or 'subId' in script_content:
+                    print(f"[player] DEBUG script {i} contains CDN references, length={len(script_content)}")
+                    # Ищем URLs в этом скрипте
+                    urls_in_script = re.findall(r'https?://[^\s"\'<>]+(?:vkuser\.net|okcdn\.ru)[^\s"\'<>]*', script_content)
+                    if urls_in_script:
+                        print(f"[player] DEBUG script {i} found {len(urls_in_script)} URLs")
+                        for u in urls_in_script[:2]:
+                            print(f"[player] DEBUG   URL: {u[:150]}")
+                    else:
+                        # Выводим кусок скрипта для анализа
+                        cdn_pos = max(script_content.find('okcdn'), script_content.find('vkuser'), script_content.find('subId'))
+                        if cdn_pos > 0:
+                            sample_start = max(0, cdn_pos - 100)
+                            sample_end = min(len(script_content), cdn_pos + 200)
+                            print(f"[player] DEBUG script {i} sample around CDN: {script_content[sample_start:sample_end]}")
+            
+            # Ищем все строки содержащие vkuser.net или okcdn.ru во ВСЁМ HTML
             vk_urls = re.findall(r'https?://[^\s"\'<>]+(?:vkuser\.net|okcdn\.ru)[^\s"\'<>]+', html)
             if vk_urls:
                 print(f"[player] DEBUG found {len(vk_urls)} potential CDN URLs")
