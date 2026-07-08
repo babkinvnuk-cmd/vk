@@ -372,30 +372,48 @@ async def vkvideo_search(q: str = "", offset: int = 0, count: int = 50):
 
 @app.get("/vkvideo/debug")
 async def vkvideo_debug(q: str = "anal fuck"):
-    """Дебаг - пробуємо video.search через api.vk.com"""
+    """Дебаг - пробуємо різні методи з анонімним токеном"""
     import urllib.parse as up
     token = await _get_vk_token()
     results = {}
     
     async with httpx.AsyncClient(timeout=15, follow_redirects=True) as client:
-        # video.search через api.vk.com (не vkvideo!) з adult=1
+        
+        # 1. Перевіряємо що можна робити з анонімним токеном
         try:
-            url = f"https://api.vk.com/method/video.search?v=5.131&q={up.quote(q)}&count=5&adult=1&access_token={token}"
-            r = await client.get(url, headers={
-                "User-Agent": "Mozilla/5.0",
-                "Referer": "https://vk.com/",
-            })
-            results["vk_com_video_search"] = r.json()
+            methods_url = f"https://api.vk.com/method/utils.getServerTime?v=5.131&access_token={token}"
+            r = await client.get(methods_url, headers={"User-Agent": "Mozilla/5.0"})
+            results["token_works"] = r.json()
         except Exception as e:
-            results["vk_com_video_search"] = str(e)
+            results["token_works"] = str(e)
 
-        # video.search через api.vk.com без adult
+        # 2. groups.search - шукаємо порно спільноти
         try:
-            url2 = f"https://api.vk.com/method/video.search?v=5.131&q={up.quote(q)}&count=5&access_token={token}"
-            r2 = await client.get(url2, headers={"User-Agent": "Mozilla/5.0", "Referer": "https://vk.com/"})
-            results["vk_com_no_adult"] = r2.json()
+            url = f"https://api.vk.com/method/groups.search?v=5.131&q={up.quote(q)}&type=group&count=5&access_token={token}"
+            r = await client.get(url, headers={"User-Agent": "Mozilla/5.0", "Referer": "https://vk.com/"})
+            results["groups_search"] = r.json()
         except Exception as e:
-            results["vk_com_no_adult"] = str(e)
+            results["groups_search"] = str(e)
+
+        # 3. newsfeed.search - пошук по всіх постах
+        try:
+            url = f"https://api.vk.com/method/newsfeed.search?v=5.131&q={up.quote(q)}&count=5&access_token={token}"
+            r = await client.get(url, headers={"User-Agent": "Mozilla/5.0", "Referer": "https://vk.com/"})
+            results["newsfeed_search"] = r.json()
+        except Exception as e:
+            results["newsfeed_search"] = str(e)
+
+        # 4. Спробуємо catalog.getVideoFilters - може є фільтр adult
+        try:
+            post_data = f"access_token={token}"
+            r = await client.post(
+                f"https://api.vkvideo.ru/method/catalog.getVideoFilters?v=5.264&client_id={VK_CLIENT_ID}",
+                content=post_data.encode(),
+                headers={"Content-Type": "application/x-www-form-urlencoded", "User-Agent": "Mozilla/5.0", "Referer": "https://vkvideo.ru/"}
+            )
+            results["catalog_filters"] = r.json()
+        except Exception as e:
+            results["catalog_filters"] = str(e)
 
     return Response(
         content=json.dumps(results, ensure_ascii=False),
