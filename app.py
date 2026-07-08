@@ -445,7 +445,7 @@ async def vkvideo_debug(q: str = "anal"):
 
 @app.get("/vkvideo/adult")
 async def vkvideo_adult_search(q: str = "", offset: int = 0, count: int = 50):
-    """Пошук відео через VK API catalog search (как /vkmovie/search, но без фильтров на фильмы)"""
+    """Пошук adult відео через старий VK API video.search з adult=1"""
     if not q:
         return Response(content='{"error":"no query"}', status_code=400,
                         media_type="application/json", headers={"Access-Control-Allow-Origin": "*"})
@@ -458,23 +458,14 @@ async def vkvideo_adult_search(q: str = "", offset: int = 0, count: int = 50):
     import urllib.parse
     import json as _json
     
-    # Используем catalog search как в /vkmovie/search
-    post_data = (
-        "screen_ref=search_video_service&input_method=keyboard_search_button"
-        f"&q={urllib.parse.quote(q)}&offset={offset}&count={count}&access_token={token}"
-    )
+    # Используем СТАРЫЙ API video.search с adult=1
+    url = f"{VK_SEARCH_OLD_URL}&q={urllib.parse.quote(q)}&offset={offset}&count={count}&access_token={token}"
     
     async with httpx.AsyncClient(timeout=15, follow_redirects=True) as client:
-        r = await client.post(
-            VK_SEARCH_URL,
-            content=post_data.encode(),
-            headers={
-                "Content-Type": "application/x-www-form-urlencoded",
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-                "Origin": "https://vkvideo.ru",
-                "Referer": "https://vkvideo.ru/",
-            }
-        )
+        r = await client.get(url, headers={
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+            "Referer": "https://vk.com/",
+        })
     
     try:
         data = r.json()
@@ -483,10 +474,9 @@ async def vkvideo_adult_search(q: str = "", offset: int = 0, count: int = 50):
                         media_type="application/json", headers={"Access-Control-Allow-Origin": "*"})
     
     results = []
-    videos = data.get("response", {}).get("catalog_videos", [])
+    items = data.get("response", {}).get("items", [])
     
-    for item in videos:
-        v = item.get("video")
+    for v in items:
         if not v:
             continue
         files = v.get("files") or {}
@@ -503,10 +493,11 @@ async def vkvideo_adult_search(q: str = "", offset: int = 0, count: int = 50):
             "hls": files.get("hls"), "subtitles": v.get("subtitles") or [],
         })
     
-    print(f"[adult] q='{q}' total results={len(results)}")
+    total_count = data.get("response", {}).get("count", len(results))
+    print(f"[adult] q='{q}' total results={len(results)} (total available={total_count})")
     
     return Response(
-        content=_json.dumps({"items": results, "count": len(results), "offset": offset}, ensure_ascii=False),
+        content=_json.dumps({"items": results, "count": total_count, "offset": offset}, ensure_ascii=False),
         media_type="application/json",
         headers={"Access-Control-Allow-Origin": "*"}
     )
