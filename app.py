@@ -477,8 +477,16 @@ async def vkvideo_adult_search(q: str = "", offset: int = 0, count: int = 50):
                     "User-Agent": "Mozilla/5.0",
                     "Referer": "https://vkvideo.ru/"
                 })
-                return vr.json().get("response", {}).get("items", [])
-            except Exception:
+                data = vr.json()
+                items = data.get("response", {}).get("items", [])
+                if not items:
+                    # Логируем если паблик пустой или ошибка
+                    error = data.get("error")
+                    if error:
+                        print(f"[adult] owner {owner_id} error: {error.get('error_msg', 'unknown')}")
+                return items
+            except Exception as e:
+                print(f"[adult] owner {owner_id} fetch error: {e}")
                 return []
 
         tasks = [fetch_owner(oid) for oid in all_owners]
@@ -507,7 +515,9 @@ async def vkvideo_adult_search(q: str = "", offset: int = 0, count: int = 50):
                     "hls": files.get("hls"), "subtitles": v.get("subtitles") or [],
                 })
 
-    print(f"[adult] q='{q}' total results={len(results)}")
+    # Подсчитываем сколько всего видео было получено до фильтрации
+    total_videos_fetched = sum(len(items) for items in all_items_list)
+    print(f"[adult] q='{q}' total results={len(results)} (fetched {total_videos_fetched} videos from {len(all_owners)} owners)")
 
     paginated = results[offset:offset + count]
 
@@ -527,13 +537,17 @@ async def vkvideo_upgrade_urls(owner_id: int, video_id: int):
     # Формируем URL player страницы
     player_url = f"https://vk.com/video_ext.php?oid={owner_id}&id={video_id}&hd=2"
     
-    print(f"[upgrade] fetching player for {owner_id}_{video_id}: {player_url}")
+    print(f"[upgrade] START for {owner_id}_{video_id}")
+    print(f"[upgrade] player URL: {player_url}")
     
     # Пробуем извлечь URL из player
     player_files = await _extract_video_urls_from_player(player_url)
     
-    if player_files:
-        print(f"[upgrade] extracted {len(player_files)} URLs from player")
+    if player_files and len(player_files) > 0:
+        print(f"[upgrade] SUCCESS: extracted {len(player_files)} URLs from player HTML")
+        for key, url in player_files.items():
+            has_subid = 'subId=' in url if url else False
+            print(f"[upgrade]   {key}: {url[:80] if url else 'null'}... (subId={has_subid})")
         return Response(
             content=_json.dumps(player_files, ensure_ascii=False),
             media_type="application/json",
@@ -541,8 +555,10 @@ async def vkvideo_upgrade_urls(owner_id: int, video_id: int):
         )
     
     # Fallback: пробуем через video.get API
+    print(f"[upgrade] player HTML extraction FAILED, trying video.get API fallback")
     token = await _get_vk_token()
     if not token:
+        print(f"[upgrade] FAILED: no VK token")
         return Response(content='{"error":"no_token"}', status_code=503,
                         media_type="application/json", headers={"Access-Control-Allow-Origin": "*"})
     
@@ -561,6 +577,7 @@ async def vkvideo_upgrade_urls(owner_id: int, video_id: int):
             items = data.get("response", {}).get("items", [])
             
             if not items:
+                print(f"[upgrade] FAILED: video.get returned no items")
                 return Response(content='{"error":"not found"}', status_code=404,
                               media_type="application/json", headers={"Access-Control-Allow-Origin": "*"})
             
@@ -575,7 +592,9 @@ async def vkvideo_upgrade_urls(owner_id: int, video_id: int):
                 "hls": files.get("hls"), "subtitles": v.get("subtitles") or [],
             }
             
-            print(f"[upgrade] fallback video.get returned {sum(1 for v in result.values() if v)} URLs")
+            urls_count = sum(1 for v in result.values() if v and isinstance(v, str))
+            subid_count = sum(1 for v in result.values() if v and isinstance(v, str) and 'subId=' in v)
+            print(f"[upgrade] FALLBACK video.get: returned {urls_count} URLs ({subid_count} with subId)")
             
             return Response(
                 content=_json.dumps(result, ensure_ascii=False),
@@ -583,7 +602,9 @@ async def vkvideo_upgrade_urls(owner_id: int, video_id: int):
                 headers={"Access-Control-Allow-Origin": "*"}
             )
         except Exception as e:
-            print(f"[upgrade] error: {e}")
+            import traceback
+            print(f"[upgrade] EXCEPTION: {e}")
+            print(f"[upgrade] traceback: {traceback.format_exc()}")
             return Response(content=_json.dumps({"error": str(e)}), status_code=500,
                           media_type="application/json", headers={"Access-Control-Allow-Origin": "*"})
 
@@ -676,61 +697,88 @@ async def _extract_video_urls_from_player(player_url: str) -> dict:
             
             print(f"[player] fetched {len(html)} bytes from {player_url}")
             
-            # Пробуем разные паттерны для разных версий плеера
+            # DEBUG: поиск различных паттернов URL в HTML
+            # 1. Ищем все строки содержащие vkuser.net или okcdn.ru
+            vk_urls = re.findall(r'https?://[^\s"\'<>]+(?:vkuser\.net|okcdn\.ru)[^\s"\'<>]+', html)
+            if vk_urls:
+                print(f"[player] DEBUG found {len(vk_urls)} potential CDN URLs")
+                for i, u in enumerate(vk_urls[:3]):  # показываем первые 3
+                    print(f"[player] DEBUG CDN URL {i+1}: {u[:150]}")
+            
+            # 2. Ищем JSON объекты с url
+            json_objects = re.findall(r'\{[^{}]*"url[^{}]{10,500}\}', html)
+            if json_objects:
+                print(f"[player] DEBUG found {len(json_objects)} JSON objects with 'url'")
+                for i, obj in enumerate(json_objects[:2]):  # показываем первые 2
+                    print(f"[player] DEBUG JSON {i+1}: {obj[:200]}")
+            
+            # 3. Ищем <script> блоки с данными
+            scripts = re.findall(r'<script[^>]*>var\s+\w+\s*=\s*(\{[^<]{100,1000}\})', html, re.DOTALL)
+            if scripts:
+                print(f"[player] DEBUG found {len(scripts)} script var assignments")
+            
+            # Пробуем извлечь URL из найденных паттернов
             urls = {}
             
-            # Паттерн 1: "url720":"https://..."
-            matches = re.findall(r'"url(\d+)":"([^"]+)"', html)
-            for quality, url in matches:
+            # Метод 1: Прямой поиск URL в HTML (самый надёжный)
+            for url in vk_urls:
+                # Проверяем что это рабочий URL (с subId или полный URL)
+                if 'subId=' in url:
+                    # Определяем качество по контексту или берём базовое
+                    if '/720' in url or 'hd=1' in url:
+                        urls['mp4_720'] = url
+                    elif '/1080' in url or 'hd=2' in url:
+                        urls['mp4_1080'] = url
+                    elif '/480' in url:
+                        urls['mp4_480'] = url
+                    elif '/360' in url:
+                        urls['mp4_360'] = url
+                    elif '.m3u8' in url:
+                        urls['hls'] = url
+                    else:
+                        # Если качество не определено, берём как 720p
+                        if 'mp4_720' not in urls:
+                            urls['mp4_720'] = url
+                    print(f"[player] extracted URL with subId (len={len(url)})")
+            
+            # Метод 2: Парсинг JSON объектов
+            for obj_text in json_objects:
                 try:
-                    decoded_url = url.encode('utf-8').decode('unicode_escape')
-                    if decoded_url and ('subId=' in decoded_url or 'okcdn.ru' in decoded_url or 'vkuser.net' in decoded_url):
-                        urls[f"mp4_{quality}"] = decoded_url
-                        print(f"[player] found mp4_{quality}: {decoded_url[:100]}...")
-                except Exception:
+                    # Пытаемся найти URL внутри JSON текста
+                    url_match = re.search(r'"url\d*":\s*"([^"]+)"', obj_text)
+                    if url_match:
+                        url = url_match.group(1)
+                        # Декодируем escape последовательности
+                        url = url.encode('utf-8').decode('unicode_escape')
+                        if 'subId=' in url and ('vkuser.net' in url or 'okcdn.ru' in url):
+                            # Определяем качество
+                            quality_match = re.search(r'"url(\d+)"', obj_text)
+                            if quality_match:
+                                quality = quality_match.group(1)
+                                urls[f"mp4_{quality}"] = url
+                                print(f"[player] extracted mp4_{quality} from JSON")
+                except Exception as e:
+                    print(f"[player] JSON parse error: {e}")
                     continue
             
-            # Паттерн 2: "hls":"https://..."
-            hls_patterns = [
-                r'"hls":"([^"]+)"',
-                r'"hlsUrl":"([^"]+)"',
-                r'"hlsMasterPlaylistUrl":"([^"]+)"'
-            ]
-            for pattern in hls_patterns:
-                hls_match = re.search(pattern, html)
-                if hls_match:
+            # Метод 3: Старые паттерны для совместимости
+            if not urls:
+                # Паттерн: "url720":"https://..."
+                matches = re.findall(r'"url(\d+)":"([^"]+)"', html)
+                for quality, url in matches:
                     try:
-                        hls_url = hls_match.group(1).encode('utf-8').decode('unicode_escape')
-                        if hls_url and ('subId=' in hls_url or 'm3u8' in hls_url):
-                            urls["hls"] = hls_url
-                            print(f"[player] found hls: {hls_url[:100]}...")
-                            break
+                        decoded_url = url.encode('utf-8').decode('unicode_escape')
+                        if 'subId=' in decoded_url or 'okcdn.ru' in decoded_url or 'vkuser.net' in decoded_url:
+                            urls[f"mp4_{quality}"] = decoded_url
                     except Exception:
-                        pass
+                        continue
             
-            # Паттерн 3: поиск JSON блоков с player_config
-            json_blocks = re.findall(r'(?:playerConfig|videoConfig|player_config)\s*[:=]\s*(\{[^}]+\})', html, re.IGNORECASE)
-            for block in json_blocks:
-                try:
-                    # Пытаемся найти URL в JSON блоке
-                    block_urls = re.findall(r'"url\d*":\s*"([^"]+)"', block)
-                    for url in block_urls:
-                        decoded = url.encode('utf-8').decode('unicode_escape')
-                        if 'subId=' in decoded or 'okcdn' in decoded:
-                            # Определяем качество по размеру или паттерну
-                            if '/720/' in decoded or 'url720' in block:
-                                urls['mp4_720'] = decoded
-                            elif '/1080/' in decoded or 'url1080' in block:
-                                urls['mp4_1080'] = decoded
-                            elif 'm3u8' in decoded:
-                                urls['hls'] = decoded
-                except Exception:
-                    continue
-            
-            print(f"[player] extracted {len(urls)} URLs")
+            print(f"[player] extracted {len(urls)} working URLs with subId")
             return urls
     except Exception as e:
+        import traceback
         print(f"[player] extraction error: {e}")
+        print(f"[player] traceback: {traceback.format_exc()}")
         return {}
 
 
