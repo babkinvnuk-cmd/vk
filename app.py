@@ -370,7 +370,7 @@ async def vkvideo_search(q: str = "", offset: int = 0, count: int = 50):
     )
 
 
-# Список відомих порно пабліків VK (збирається динамічно + захардкоджені)
+# Список відомих порно пабліків VK - читається з owners.txt
 _porn_owners = set([
     -231023619, -88754941, -224344313, -176294899, -211869299, -150019313,
     -209976560, -122033519, -229794799, -187019501, -227406675, -217878975,
@@ -380,28 +380,26 @@ _porn_owners = set([
 ])
 _porn_owners_loaded = False
 
-async def _refresh_porn_owners(token: str, client):
-    """Динамічно оновлює список порно пабліків"""
-    global _porn_owners, _porn_owners_loaded
-    if _porn_owners_loaded:
-        return
-    import urllib.parse as up
-    porn_queries = ["legalporno", "brazzers", "anal creampie", "pornhub", "onlyfans", "xxx"]
-    for pq in porn_queries:
-        try:
-            post_data = f"screen_ref=search_video_service&input_method=keyboard_search_button&q={up.quote(pq)}&count=20&access_token={token}"
-            r = await client.post(VK_SEARCH_URL, content=post_data.encode(), headers={
-                "Content-Type": "application/x-www-form-urlencoded",
-                "User-Agent": "Mozilla/5.0", "Referer": "https://vkvideo.ru/"
-            })
-            for item in r.json().get("response", {}).get("catalog_videos", []):
-                v = item.get("video", {})
-                if v.get("owner_id"):
-                    _porn_owners.add(v["owner_id"])
-        except Exception:
-            continue
-    _porn_owners_loaded = True
-    print(f"[porn_owners] total: {len(_porn_owners)}")
+def _load_owners_from_file():
+    """Читає owner_id з owners.txt"""
+    global _porn_owners
+    try:
+        owners_file = os.path.join(os.path.dirname(__file__), 'owners.txt')
+        if os.path.exists(owners_file):
+            with open(owners_file, 'r') as f:
+                for line in f:
+                    line = line.strip()
+                    if line and not line.startswith('#'):
+                        try:
+                            _porn_owners.add(int(line))
+                        except ValueError:
+                            pass
+            print(f"[owners] loaded {len(_porn_owners)} owners from file")
+    except Exception as e:
+        print(f"[owners] file load error: {e}")
+
+# Завантажуємо при старті
+_load_owners_from_file()
 async def vkvideo_debug(q: str = "anal"):
     """Дебаг - шукаємо порно паблики через catalog.getVideoSearchWeb2"""
     import urllib.parse as up
@@ -442,7 +440,7 @@ async def vkvideo_debug(q: str = "anal"):
 
 @app.get("/vkvideo/adult")
 async def vkvideo_adult_search(q: str = "", offset: int = 0, count: int = 50):
-    """Пошук відео - VK API + DDG site:vkvideo.ru паралельно"""
+    """Пошук відео ТІЛЬКИ по паблікам з owners.txt"""
     if not q:
         return Response(content='{"error":"no query"}', status_code=400,
                         media_type="application/json", headers={"Access-Control-Allow-Origin": "*"})
@@ -452,90 +450,57 @@ async def vkvideo_adult_search(q: str = "", offset: int = 0, count: int = 50):
         return Response(content='{"error":"no_token"}', status_code=503,
                         media_type="application/json", headers={"Access-Control-Allow-Origin": "*"})
 
-    import urllib.parse
+    import urllib.parse, random
     results = []
     existing = set()
+    q_words = [w.lower() for w in q.lower().split() if len(w) > 2]
 
     async with httpx.AsyncClient(timeout=20, follow_redirects=True) as client:
+        all_owners = list(_porn_owners)
+        random.shuffle(all_owners)
 
-        # 1. Звичайний VK API пошук
-        try:
-            post_data = (
-                "screen_ref=search_video_service&input_method=keyboard_search_button"
-                f"&q={urllib.parse.quote(q)}&offset={offset}&count={count}&access_token={token}"
-            )
-            r = await client.post(VK_SEARCH_URL, content=post_data.encode(), headers={
-                "Content-Type": "application/x-www-form-urlencoded",
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-                "Origin": "https://vkvideo.ru",
-                "Referer": "https://vkvideo.ru/",
-            })
-            data = r.json()
-            for item in data.get("response", {}).get("catalog_videos", []):
-                v = item.get("video")
-                if not v:
-                    continue
-                key = f"{v.get('owner_id')}_{v.get('id')}"
-                if key in existing:
-                    continue
-                existing.add(key)
-                files = v.get("files") or {}
-                results.append({
-                    "id": v.get("id"), "owner_id": v.get("owner_id"),
-                    "title": v.get("title"), "description": v.get("description", ""),
-                    "duration": v.get("duration", 0), "image": v.get("image", []),
-                    "date": v.get("date"), "views": v.get("views", 0),
-                    "player": v.get("player"),
-                    "mp4_1080": files.get("mp4_1080"), "mp4_720": files.get("mp4_720"),
-                    "mp4_480": files.get("mp4_480"), "mp4_360": files.get("mp4_360"),
-                    "hls": files.get("hls"), "subtitles": v.get("subtitles") or [],
+        # Пагінація: кожен offset бере наступні 5 пабліків
+        page_size = 5
+        start = (offset // 50) * page_size
+        owners_to_search = all_owners[start:start + page_size]
+
+        for owner_id in owners_to_search:
+            try:
+                vg_url = (
+                    f"https://api.vkvideo.ru/method/video.get"
+                    f"?v=5.264&client_id={VK_CLIENT_ID}"
+                    f"&owner_id={owner_id}&count=200&access_token={token}"
+                )
+                vr = await client.get(vg_url, headers={
+                    "User-Agent": "Mozilla/5.0",
+                    "Referer": "https://vkvideo.ru/"
                 })
-        except Exception as e:
-            print(f"[vkvideo/adult] VK API error: {e}")
+                vdata = vr.json()
 
-        # 2. Пошук по відомих порно пабліках через video.get з фільтром по назві
-        try:
-            await _refresh_porn_owners(token, client)
-            
-            # Беремо рандомні 10 пабліків щоб не перевантажувати
-            import random
-            owners_to_search = random.sample(list(_porn_owners), min(10, len(_porn_owners)))
-            
-            for owner_id in owners_to_search:
-                try:
-                    vg_url = (
-                        f"https://api.vkvideo.ru/method/video.get"
-                        f"?v=5.264&client_id={VK_CLIENT_ID}"
-                        f"&owner_id={owner_id}&count=50&access_token={token}"
-                    )
-                    vr = await client.get(vg_url, headers={"User-Agent": "Mozilla/5.0", "Referer": "https://vkvideo.ru/"})
-                    vdata = vr.json()
-                    q_lower = q.lower()
-                    
-                    for v in vdata.get("response", {}).get("items", []):
-                        # Фільтруємо по назві
-                        title = (v.get("title") or "").lower()
-                        if not any(word in title for word in q_lower.split()):
-                            continue
-                        key = f"{v.get('owner_id')}_{v.get('id')}"
-                        if key in existing:
-                            continue
-                        files = v.get("files") or {}
-                        existing.add(key)
-                        results.append({
-                            "id": v.get("id"), "owner_id": v.get("owner_id"),
-                            "title": v.get("title"), "description": v.get("description", ""),
-                            "duration": v.get("duration", 0), "image": v.get("image", []),
-                            "date": v.get("date"), "views": v.get("views", 0),
-                            "player": v.get("player"),
-                            "mp4_1080": files.get("mp4_1080"), "mp4_720": files.get("mp4_720"),
-                            "mp4_480": files.get("mp4_480"), "mp4_360": files.get("mp4_360"),
-                            "hls": files.get("hls"), "subtitles": v.get("subtitles") or [],
-                        })
-                except Exception:
-                    continue
-        except Exception as e:
-            print(f"[vkvideo/adult] porn owners error: {e}")
+                for v in vdata.get("response", {}).get("items", []):
+                    title = (v.get("title") or "").lower()
+                    if q_words and not any(w in title for w in q_words):
+                        continue
+                    key = f"{v.get('owner_id')}_{v.get('id')}"
+                    if key in existing:
+                        continue
+                    files = v.get("files") or {}
+                    existing.add(key)
+                    results.append({
+                        "id": v.get("id"), "owner_id": v.get("owner_id"),
+                        "title": v.get("title"), "description": v.get("description", ""),
+                        "duration": v.get("duration", 0), "image": v.get("image", []),
+                        "date": v.get("date"), "views": v.get("views", 0),
+                        "player": v.get("player"),
+                        "mp4_1080": files.get("mp4_1080"), "mp4_720": files.get("mp4_720"),
+                        "mp4_480": files.get("mp4_480"), "mp4_360": files.get("mp4_360"),
+                        "hls": files.get("hls"), "subtitles": v.get("subtitles") or [],
+                    })
+            except Exception as e:
+                print(f"[adult] owner {owner_id} error: {e}")
+                continue
+
+        print(f"[adult] q='{q}' owners={len(owners_to_search)} results={len(results)}")
 
     import json
     return Response(
