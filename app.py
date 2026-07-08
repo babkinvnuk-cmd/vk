@@ -589,6 +589,68 @@ async def vkmovie_search(q: str, kp: str = "", year: str = ""):
 
 
 
+async def _extract_video_urls_from_player(player_url: str) -> dict:
+    """Извлекает рабочие URL с subId из встроенного плеера VK"""
+    if not player_url:
+        return {}
+    
+    try:
+        async with httpx.AsyncClient(timeout=15, follow_redirects=True) as client:
+            r = await client.get(player_url, headers={
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+                "Referer": "https://vkvideo.ru/",
+            })
+            html = r.text
+            
+            # Ищем JSON с url в window.videoPlayerConfig или подобном
+            matches = re.findall(r'"url(\d+)":"([^"]+)"', html)
+            urls = {}
+            for quality, url in matches:
+                try:
+                    # Декодируем escaped URL
+                    decoded_url = url.encode('utf-8').decode('unicode_escape')
+                    # Проверяем что есть subId (признак рабочего URL)
+                    if 'subId=' in decoded_url:
+                        urls[f"mp4_{quality}"] = decoded_url
+                except Exception:
+                    continue
+            
+            # Ищем hls
+            hls_match = re.search(r'"hls":"([^"]+)"', html)
+            if hls_match:
+                try:
+                    hls_url = hls_match.group(1).encode('utf-8').decode('unicode_escape')
+                    if 'subId=' in hls_url:
+                        urls["hls"] = hls_url
+                except Exception:
+                    pass
+                    
+            return urls
+    except Exception as e:
+        print(f"[player] extraction error: {e}")
+        return {}
+
+
+@app.get("/vkvideo/player")
+async def vkvideo_player_extract(player: str):
+    """Извлекает рабочие URL из встроенного плеера VK (с subId)"""
+    if not player:
+        return Response(
+            content=json.dumps({"error": "no player url"}),
+            status_code=400,
+            media_type="application/json",
+            headers={"Access-Control-Allow-Origin": "*"}
+        )
+    
+    urls = await _extract_video_urls_from_player(player)
+    
+    return Response(
+        content=json.dumps({"files": urls}, ensure_ascii=False),
+        media_type="application/json",
+        headers={"Access-Control-Allow-Origin": "*"}
+    )
+
+
 @app.api_route("/vkmovie/stream", methods=["GET", "HEAD"])
 async def vkmovie_stream(request: Request):
     """Проксує VK відео/сегменти через HF Space (обхід блокування .ru доменів)"""
