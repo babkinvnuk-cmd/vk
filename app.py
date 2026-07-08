@@ -697,6 +697,11 @@ async def _extract_video_urls_from_player(player_url: str) -> dict:
             
             print(f"[player] fetched {len(html)} bytes from {player_url}")
             
+            # DEBUG: выводим первые 2000 символов HTML чтобы увидеть структуру
+            print(f"[player] DEBUG HTML sample (first 2000 chars):")
+            print(html[:2000])
+            print("[player] DEBUG HTML sample (end)")
+            
             # DEBUG: поиск различных паттернов URL в HTML
             # 1. Ищем все строки содержащие vkuser.net или okcdn.ru
             vk_urls = re.findall(r'https?://[^\s"\'<>]+(?:vkuser\.net|okcdn\.ru)[^\s"\'<>]+', html)
