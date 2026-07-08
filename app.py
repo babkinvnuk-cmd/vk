@@ -594,10 +594,17 @@ async def vkmovie_stream(url: str, request: Request):
     if not url:
         return Response(content="no url", status_code=400)
 
+    referer = "https://vk.com/"
+    origin = "https://vk.com"
+
+    if "vkvideo.ru" in url:
+        referer = "https://vkvideo.ru/"
+        origin = "https://vkvideo.ru"
+
     req_headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-        "Referer": "https://vkvideo.ru/",
-        "Origin": "https://vkvideo.ru",
+        "Referer": referer,
+        "Origin": origin,
     }
     range_header = request.headers.get("range")
     if range_header:
