@@ -372,35 +372,48 @@ async def vkvideo_search(q: str = "", offset: int = 0, count: int = 50):
 
 @app.get("/vkvideo/debug")
 async def vkvideo_debug(q: str = "anal fuck"):
-    """Дебаг - дивимось що повертає vkvideo.ru/search"""
+    """Дебаг - пробуємо різні API ендпоінти"""
     import urllib.parse as up
+    token = await _get_vk_token()
+    results = {}
+    
     async with httpx.AsyncClient(timeout=15, follow_redirects=True) as client:
-        # Пробуємо звичайний веб-пошук
-        url = f"https://vkvideo.ru/search?q={up.quote(q)}"
-        r = await client.get(url, headers={
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124.0.0.0 Safari/537.36',
-            'Accept': 'text/html,application/xhtml+xml',
-            'Accept-Language': 'ru-RU,ru;q=0.9',
-        })
-        html = r.text
-        
-        # Шукаємо video IDs в HTML
-        vk_ids = re.findall(r'video(-?\d+)_(\d+)', html)
-        
-        # Шукаємо JSON з відео даними
-        json_blocks = re.findall(r'"id":\s*(\d+).*?"owner_id":\s*(-?\d+)', html[:5000])
-        
-        return Response(
-            content=json.dumps({
-                "status": r.status_code,
-                "url": url,
-                "video_ids_found": len(vk_ids),
-                "sample_ids": vk_ids[:5],
-                "html_snippet": html[:2000],
-            }, ensure_ascii=False),
-            media_type="application/json",
-            headers={"Access-Control-Allow-Origin": "*"}
-        )
+        # 1. api.vkvideo.ru пошук
+        try:
+            url1 = f"https://api.vkvideo.ru/method/video.search?v=5.264&q={up.quote(q)}&count=5&adult=1&access_token={token}"
+            r1 = await client.get(url1, headers={"User-Agent": "Mozilla/5.0", "Referer": "https://vkvideo.ru/"})
+            results["video.search_adult"] = r1.json()
+        except Exception as e:
+            results["video.search_adult"] = str(e)
+
+        # 2. catalog.getVideoSearchWeb2 без фільтра - сира відповідь
+        try:
+            post_data = f"screen_ref=search_video_service&input_method=keyboard_search_button&q={up.quote(q)}&count=5&access_token={token}"
+            r2 = await client.post(
+                f"https://api.vkvideo.ru/method/catalog.getVideoSearchWeb2?v=5.264&client_id={VK_CLIENT_ID}",
+                content=post_data.encode(),
+                headers={"Content-Type": "application/x-www-form-urlencoded", "User-Agent": "Mozilla/5.0", "Referer": "https://vkvideo.ru/"}
+            )
+            data2 = r2.json()
+            # Показуємо перші 2 відео
+            videos = data2.get("response", {}).get("catalog_videos", [])[:2]
+            results["catalog_search_raw"] = {"count": len(data2.get("response", {}).get("catalog_videos", [])), "sample": videos}
+        except Exception as e:
+            results["catalog_search_raw"] = str(e)
+
+        # 3. Пробуємо video.search без adult
+        try:
+            url3 = f"https://api.vkvideo.ru/method/video.search?v=5.264&q={up.quote(q)}&count=5&access_token={token}"
+            r3 = await client.get(url3, headers={"User-Agent": "Mozilla/5.0", "Referer": "https://vkvideo.ru/"})
+            results["video.search_no_adult"] = r3.json()
+        except Exception as e:
+            results["video.search_no_adult"] = str(e)
+
+    return Response(
+        content=json.dumps(results, ensure_ascii=False),
+        media_type="application/json",
+        headers={"Access-Control-Allow-Origin": "*"}
+    )
 
 
 @app.get("/vkvideo/adult")
