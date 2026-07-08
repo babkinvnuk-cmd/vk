@@ -520,13 +520,31 @@ async def vkvideo_adult_search(q: str = "", offset: int = 0, count: int = 50):
 
 @app.get("/vkvideo/upgrade")
 async def vkvideo_upgrade_urls(owner_id: int, video_id: int):
-    """Получает рабочие URL для конкретного видео (с subId)"""
+    """Получает рабочие URL для конкретного видео через парсинг player HTML"""
+    
+    import json as _json
+    
+    # Формируем URL player страницы
+    player_url = f"https://vk.com/video_ext.php?oid={owner_id}&id={video_id}&hd=2"
+    
+    print(f"[upgrade] fetching player for {owner_id}_{video_id}: {player_url}")
+    
+    # Пробуем извлечь URL из player
+    player_files = await _extract_video_urls_from_player(player_url)
+    
+    if player_files:
+        print(f"[upgrade] extracted {len(player_files)} URLs from player")
+        return Response(
+            content=_json.dumps(player_files, ensure_ascii=False),
+            media_type="application/json",
+            headers={"Access-Control-Allow-Origin": "*"}
+        )
+    
+    # Fallback: пробуем через video.get API
     token = await _get_vk_token()
     if not token:
         return Response(content='{"error":"no_token"}', status_code=503,
                         media_type="application/json", headers={"Access-Control-Allow-Origin": "*"})
-    
-    import json as _json
     
     async with httpx.AsyncClient(timeout=15, follow_redirects=True) as client:
         try:
@@ -557,12 +575,15 @@ async def vkvideo_upgrade_urls(owner_id: int, video_id: int):
                 "hls": files.get("hls"), "subtitles": v.get("subtitles") or [],
             }
             
+            print(f"[upgrade] fallback video.get returned {sum(1 for v in result.values() if v)} URLs")
+            
             return Response(
                 content=_json.dumps(result, ensure_ascii=False),
                 media_type="application/json",
                 headers={"Access-Control-Allow-Origin": "*"}
             )
         except Exception as e:
+            print(f"[upgrade] error: {e}")
             return Response(content=_json.dumps({"error": str(e)}), status_code=500,
                           media_type="application/json", headers={"Access-Control-Allow-Origin": "*"})
 
