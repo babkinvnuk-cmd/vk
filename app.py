@@ -445,7 +445,7 @@ async def vkvideo_debug(q: str = "anal"):
 
 @app.get("/vkvideo/adult")
 async def vkvideo_adult_search(q: str = "", offset: int = 0, count: int = 50):
-    """Пошук відео по всіх паблікам з owners.txt"""
+    """Пошук відео через VK API catalog search (как /vkmovie/search, но без фильтров на фильмы)"""
     if not q:
         return Response(content='{"error":"no query"}', status_code=400,
                         media_type="application/json", headers={"Access-Control-Allow-Origin": "*"})
@@ -455,68 +455,58 @@ async def vkvideo_adult_search(q: str = "", offset: int = 0, count: int = 50):
         return Response(content='{"error":"no_token"}', status_code=503,
                         media_type="application/json", headers={"Access-Control-Allow-Origin": "*"})
 
+    import urllib.parse
     import json as _json
+    
+    # Используем catalog search как в /vkmovie/search
+    post_data = (
+        "screen_ref=search_video_service&input_method=keyboard_search_button"
+        f"&q={urllib.parse.quote(q)}&offset={offset}&count={count}&access_token={token}"
+    )
+    
+    async with httpx.AsyncClient(timeout=15, follow_redirects=True) as client:
+        r = await client.post(
+            VK_SEARCH_URL,
+            content=post_data.encode(),
+            headers={
+                "Content-Type": "application/x-www-form-urlencoded",
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+                "Origin": "https://vkvideo.ru",
+                "Referer": "https://vkvideo.ru/",
+            }
+        )
+    
+    try:
+        data = r.json()
+    except Exception:
+        return Response(content='{"error":"parse"}', status_code=500,
+                        media_type="application/json", headers={"Access-Control-Allow-Origin": "*"})
+    
     results = []
-    existing = set()
-    q_words = [w.lower() for w in q.lower().split() if len(w) > 2]
-
-    all_owners = list(_porn_owners)
-    print(f"[adult] searching q='{q}' across {len(all_owners)} owners")
-
-    async with httpx.AsyncClient(timeout=30, follow_redirects=True) as client:
-        # Шукаємо по ВСІХ паблікам паралельно через asyncio
-        import asyncio
-
-        async def fetch_owner(owner_id):
-            try:
-                vg_url = (
-                    f"https://api.vkvideo.ru/method/video.get"
-                    f"?v=5.264&client_id={VK_CLIENT_ID}"
-                    f"&owner_id={owner_id}&count=200&access_token={token}"
-                )
-                vr = await client.get(vg_url, headers={
-                    "User-Agent": "Mozilla/5.0",
-                    "Referer": "https://vkvideo.ru/"
-                })
-                return vr.json().get("response", {}).get("items", [])
-            except Exception:
-                return []
-
-        # Паралельно запитуємо всі паблики
-        tasks = [fetch_owner(oid) for oid in all_owners]
-        all_items_list = await asyncio.gather(*tasks)
-
-        for items in all_items_list:
-            for v in items:
-                title = (v.get("title") or "").lower()
-                # Якщо є слова запиту - фільтруємо, якщо запит короткий - беремо все
-                if q_words and not any(w in title for w in q_words):
-                    continue
-                key = f"{v.get('owner_id')}_{v.get('id')}"
-                if key in existing:
-                    continue
-                files = v.get("files") or {}
-                existing.add(key)
-                results.append({
-                    "id": v.get("id"), "owner_id": v.get("owner_id"),
-                    "title": v.get("title"), "description": v.get("description", ""),
-                    "duration": v.get("duration", 0), "image": v.get("image", []),
-                    "date": v.get("date"), "views": v.get("views", 0),
-                    "player": v.get("player"),
-                    "mp4_2160": files.get("mp4_2160"), "mp4_1440": files.get("mp4_1440"),
-                    "mp4_1080": files.get("mp4_1080"), "mp4_720": files.get("mp4_720"),
-                    "mp4_480": files.get("mp4_480"), "mp4_360": files.get("mp4_360"),
-                    "mp4_240": files.get("mp4_240"),
-                    "hls": files.get("hls"), "subtitles": v.get("subtitles") or [],
-                })
-
+    videos = data.get("response", {}).get("catalog_videos", [])
+    
+    for item in videos:
+        v = item.get("video")
+        if not v:
+            continue
+        files = v.get("files") or {}
+        results.append({
+            "id": v.get("id"), "owner_id": v.get("owner_id"),
+            "title": v.get("title"), "description": v.get("description", ""),
+            "duration": v.get("duration", 0), "image": v.get("image", []),
+            "date": v.get("date"), "views": v.get("views", 0),
+            "player": v.get("player"),
+            "mp4_2160": files.get("mp4_2160"), "mp4_1440": files.get("mp4_1440"),
+            "mp4_1080": files.get("mp4_1080"), "mp4_720": files.get("mp4_720"),
+            "mp4_480": files.get("mp4_480"), "mp4_360": files.get("mp4_360"),
+            "mp4_240": files.get("mp4_240"),
+            "hls": files.get("hls"), "subtitles": v.get("subtitles") or [],
+        })
+    
     print(f"[adult] q='{q}' total results={len(results)}")
-
-    # Пагінація
-    paginated = results[offset:offset + count]
-
+    
     return Response(
-        content=_json.dumps({"items": paginated, "count": len(results), "offset": offset}, ensure_ascii=False),
+        content=_json.dumps({"items": results, "count": len(results), "offset": offset}, ensure_ascii=False),
         media_type="application/json",
         headers={"Access-Control-Allow-Origin": "*"}
     )
