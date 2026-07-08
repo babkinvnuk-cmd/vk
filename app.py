@@ -5,7 +5,7 @@ import gzip
 import httpx
 from urllib.parse import urljoin, quote, unquote, urlparse
 from fastapi import FastAPI, Request, Response
-from fastapi.responses import StreamingResponse
+from fastapi.responses import StreamingResponse, RedirectResponse
 from fastapi.middleware.cors import CORSMiddleware
 
 app = FastAPI()
@@ -28,6 +28,7 @@ VK_HEADERS = {
     "referer": "https://vkvideo.ru/",
     "origin": "https://vkvideo.ru",
 }
+OKCDN_UPSTREAM = os.environ.get("OKCDN_UPSTREAM", "https://recycleactor-1.hf.space").rstrip("/")
 
 
 def parse_proxy_params(request: Request):
@@ -604,6 +605,14 @@ async def vkmovie_stream(request: Request):
         
     url = url.strip().replace("`", "").strip().strip('"').strip("'").strip()
     print(f"[vkmovie/stream] Request: method={request.method}, url={repr(url)}, raw query={repr(raw_query)}")
+
+    parsed_incoming = urlparse(url)
+    if parsed_incoming.netloc and (parsed_incoming.netloc.endswith("okcdn.ru") or parsed_incoming.netloc.endswith("vkuser.net")):
+        if OKCDN_UPSTREAM:
+            return RedirectResponse(
+                url=f"{OKCDN_UPSTREAM}/vkmovie/stream?url={quote(url, safe='')}",
+                status_code=302,
+            )
 
     referer = "https://vkvideo.ru/"
     origin = "https://vkvideo.ru"
