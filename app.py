@@ -669,13 +669,13 @@ def _vkvideo_strip_xssi(text: str) -> str:
 def _vkvideo_clean_media_url(url: str) -> str:
     if not url:
         return url
-    u = str(url).strip().replace("`", "").strip().strip('"').strip("'").strip()
+    u = str(url).strip().replace("`", "").strip(" \t\r\n\"',")
     for _ in range(2):
         u2 = unquote(u)
         if u2 == u:
             break
         u = u2
-    u = u.strip().replace("`", "").strip().strip('"').strip("'").strip()
+    u = u.strip().replace("`", "").strip(" \t\r\n\"',")
     return u
 
 
@@ -1303,13 +1303,13 @@ async def vkmovie_stream(request: Request):
     if not url:
         return Response(content="no url", status_code=400)
         
-    url = url.strip().replace("`", "").strip().strip('"').strip("'").strip()
+    url = url.strip().replace("`", "").strip(" \t\r\n\"',")
     for _ in range(2):
         url2 = unquote(url)
         if url2 == url:
             break
         url = url2
-    url = url.strip().replace("`", "").strip().strip('"').strip("'").strip()
+    url = url.strip().replace("`", "").strip(" \t\r\n\"',")
     print(f"[vkmovie/stream] Request: method={request.method}, url={repr(url)}, raw query={repr(raw_query)}")
 
     parsed_incoming = urlparse(url)
