@@ -986,19 +986,28 @@ async def vkmovie_stream(request: Request):
     url = url.strip().replace("`", "").strip().strip('"').strip("'").strip()
     print(f"[vkmovie/stream] Request: method={request.method}, url={repr(url)}, raw query={repr(raw_query)}")
 
-    # ИСПРАВЛЕНИЕ: Если URL содержит /video.m3u8, убираем это из пути
-    # VK возвращает URLs типа https://vk6-13.vkuser.net/video.m3u8?sig=...
-    # Но рабочие URLs типа https://vk6-13.vkuser.net/?subId=...&sig=...
-    # Убираем /video.m3u8 чтобы получить редирект на правильный URL с subId
     parsed_incoming = urlparse(url)
-    if parsed_incoming.netloc.endswith('.vkuser.net') and '/video.m3u8' in parsed_incoming.path:
-        # Заменяем /video.m3u8 на / сохраняя query parameters
-        url = url.replace('/video.m3u8?', '/?')
-        print(f"[vkmovie/stream] TRANSFORMED URL (removed /video.m3u8): {repr(url)}")
-        parsed_incoming = urlparse(url)
     
-    # НЕ трогаем srcIp - подпись sig вычислена с ним, изменение сломает валидацию
-    # Пробуем просто проксировать с правильными заголовками
+    # РЕШЕНИЕ: Заменяем srcIp в URL на IP Render прокси
+    # VK проверяет что srcIp совпадает с реальным IP запрашивающего
+    # Меняем srcIp на IP прокси чтобы валидация прошла
+    if 'srcIp=' in url and (parsed_incoming.netloc.endswith('.okcdn.ru') or parsed_incoming.netloc.endswith('.vkuser.net')):
+        # Получаем IP Render прокси
+        try:
+            async with httpx.AsyncClient(timeout=5) as client:
+                r = await client.get('https://api.ipify.org?format=text')
+                proxy_ip = r.text.strip()
+                print(f"[vkmovie/stream] Render proxy IP: {proxy_ip}")
+                
+                # Заменяем srcIp на IP прокси
+                import re
+                url = re.sub(r'srcIp=[^&]+', f'srcIp={proxy_ip}', url)
+                print(f"[vkmovie/stream] Replaced srcIp with proxy IP: {url[:120]}")
+        except Exception as e:
+            print(f"[vkmovie/stream] Failed to get proxy IP: {e}")
+    
+    # НЕ трогаем остальные параметры
+    parsed_incoming = urlparse(url)
 
     # Убрали редирект на HuggingFace - всё проксируем через Render напрямую
     # (раньше тут был редирект на OKCDN_UPSTREAM для okcdn.ru и vkuser.net)
