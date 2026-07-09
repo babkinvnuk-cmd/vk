@@ -502,6 +502,18 @@ async def vkvideo_adult_search(q: str = "", offset: int = 0, count: int = 50):
                     continue
                 files = v.get("files") or {}
                 existing.add(key)
+                
+                # Проверяем srcAg в URLs
+                has_unknown = False
+                for url in [files.get("mp4_1080"), files.get("mp4_720"), files.get("mp4_480")]:
+                    if url and 'srcAg=UNKNOWN' in url:
+                        has_unknown = True
+                        break
+                
+                # Если URLs с UNKNOWN - логируем (для будущего исправления)
+                if has_unknown:
+                    print(f"[adult] video {key} has srcAg=UNKNOWN URLs (title: {v.get('title', '')[:50]})")
+                
                 results.append({
                     "id": v.get("id"), "owner_id": v.get("owner_id"),
                     "title": v.get("title"), "description": v.get("description", ""),
@@ -517,7 +529,8 @@ async def vkvideo_adult_search(q: str = "", offset: int = 0, count: int = 50):
 
     # Подсчитываем сколько всего видео было получено до фильтрации
     total_videos_fetched = sum(len(items) for items in all_items_list)
-    print(f"[adult] q='{q}' total results={len(results)} (fetched {total_videos_fetched} videos from {len(all_owners)} owners)")
+    unknown_count = sum(1 for r in results if any('srcAg=UNKNOWN' in (r.get(k) or '') for k in ['mp4_1080', 'mp4_720', 'mp4_480']))
+    print(f"[adult] q='{q}' total results={len(results)} ({unknown_count} with UNKNOWN srcAg) (fetched {total_videos_fetched} videos from {len(all_owners)} owners)")
 
     paginated = results[offset:offset + count]
 
@@ -1041,26 +1054,8 @@ async def vkmovie_stream(request: Request):
 
     parsed_incoming = urlparse(url)
     
-    # РЕШЕНИЕ: Заменяем srcIp в URL на IP Render прокси
-    # VK проверяет что srcIp совпадает с реальным IP запрашивающего
-    # Меняем srcIp на IP прокси чтобы валидация прошла
-    if 'srcIp=' in url and (parsed_incoming.netloc.endswith('.okcdn.ru') or parsed_incoming.netloc.endswith('.vkuser.net')):
-        # Получаем IP Render прокси
-        try:
-            async with httpx.AsyncClient(timeout=5) as client:
-                r = await client.get('https://api.ipify.org?format=text')
-                proxy_ip = r.text.strip()
-                print(f"[vkmovie/stream] Render proxy IP: {proxy_ip}")
-                
-                # Заменяем srcIp на IP прокси
-                import re
-                url = re.sub(r'srcIp=[^&]+', f'srcIp={proxy_ip}', url)
-                print(f"[vkmovie/stream] Replaced srcIp with proxy IP: {url[:120]}")
-        except Exception as e:
-            print(f"[vkmovie/stream] Failed to get proxy IP: {e}")
-    
-    # НЕ трогаем остальные параметры
-    parsed_incoming = urlparse(url)
+    # НЕ меняем srcIp - URL уже подписан VK с определенным IP
+    # Render не блокирует .ru домены, так что просто проксируем как есть
 
     # Убрали редирект на HuggingFace - всё проксируем через Render напрямую
     # (раньше тут был редирект на OKCDN_UPSTREAM для okcdn.ru и vkuser.net)
@@ -1070,19 +1065,22 @@ async def vkmovie_stream(request: Request):
 
     print(f"[vkmovie/stream] Using referer: {repr(referer)}, origin: {repr(origin)}")
 
+    # Используем ТОЧНЫЕ заголовки из браузера Chrome (из работающего запроса пользователя)
     req_headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36",
-        "Referer": referer,
-        "Origin": origin,
         "Accept": "*/*",
         "Accept-Encoding": "identity;q=1, *;q=0",
         "Accept-Language": "ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7",
-        "Sec-Fetch-Dest": "video",
-        "Sec-Fetch-Mode": "cors",
-        "Sec-Fetch-Site": "cross-site",
+        "Connection": "keep-alive",
+        "Host": parsed_incoming.netloc,  # Используем host из URL (vkvd694.okcdn.ru и т.д.)
+        "Origin": origin,
+        "Referer": referer,
         "Sec-Ch-Ua": '"Not(A:Brand";v="8", "Chromium";v="144", "Google Chrome";v="144"',
         "Sec-Ch-Ua-Mobile": "?0",
         "Sec-Ch-Ua-Platform": '"Windows"',
+        "Sec-Fetch-Dest": "video",
+        "Sec-Fetch-Mode": "cors",
+        "Sec-Fetch-Site": "cross-site",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36",
     }
     
     hf = str(request.base_url).rstrip("/").replace("http://", "https://")
