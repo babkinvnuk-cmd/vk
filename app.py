@@ -549,13 +549,16 @@ async def vkvideo_upgrade_urls(owner_id: int, video_id: int):
     try:
         urls, _meta = await _vkvideo_getforplay_urls(owner_id=owner_id, video_id=video_id)
         if not urls:
-            print(f"[upgrade] FAILED: no URLs from getForPlay")
-            return Response(
-                content='{"error":"no_urls"}',
-                status_code=404,
-                media_type="application/json",
-                headers={"Access-Control-Allow-Origin": "*"}
-            )
+            print(f"[upgrade] getForPlay empty, trying video.get")
+            urls, _meta2 = await _vkvideo_videoget_urls(owner_id=owner_id, video_id=video_id)
+            if not urls:
+                print(f"[upgrade] FAILED: no URLs from video.get")
+                return Response(
+                    content='{"error":"no_urls"}',
+                    status_code=404,
+                    media_type="application/json",
+                    headers={"Access-Control-Allow-Origin": "*"}
+                )
 
         urls_count = len(urls)
         has_sig = sum(1 for v in urls.values() if v and 'sig=' in v)
@@ -684,12 +687,68 @@ async def _vkvideo_getforplay_urls(owner_id: int, video_id: int):
     return urls, meta
 
 
+async def _vkvideo_videoget_urls(owner_id: int, video_id: int):
+    token = await _get_vk_token()
+    if not token:
+        return {}, {"error": "no_token"}
+
+    vg_url = (
+        f"https://api.vkvideo.ru/method/video.get"
+        f"?v=5.264&client_id={VK_CLIENT_ID}"
+        f"&videos={owner_id}_{video_id}&access_token={token}"
+    )
+
+    async with httpx.AsyncClient(timeout=20, follow_redirects=True) as client:
+        r = await client.get(
+            vg_url,
+            headers={
+                "Accept": "*/*",
+                "Accept-Encoding": "identity",
+                "Accept-Language": "ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7",
+                "Origin": "https://vkvideo.ru",
+                "Referer": "https://vkvideo.ru/",
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36",
+            },
+        )
+
+    text = ""
+    try:
+        text = r.text or ""
+    except Exception:
+        text = ""
+
+    meta = {
+        "status_code": r.status_code,
+        "content_type": r.headers.get("content-type", ""),
+        "content_length": len(r.content or b""),
+        "body_preview": text[:500],
+    }
+
+    if not text:
+        return {}, meta
+
+    text = _vkvideo_strip_xssi(text)
+    meta["body_stripped_preview"] = text[:500]
+    try:
+        data = json.loads(text)
+    except Exception:
+        return {}, {**meta, "error": "json_parse_error"}
+
+    urls = {}
+    _vkvideo_extract_urls_from_obj(data, urls)
+
+    return urls, meta
+
+
 @app.get("/vkvideo/getforplay")
 async def vkvideo_getforplay_debug(owner_id: int, video_id: int):
     urls, meta = await _vkvideo_getforplay_urls(owner_id=owner_id, video_id=video_id)
+    urls2, meta2 = await _vkvideo_videoget_urls(owner_id=owner_id, video_id=video_id)
     result = {
         "meta": meta,
         "urls": urls,
+        "meta_video_get": meta2,
+        "urls_video_get": urls2,
         "has_sig": sum(1 for v in urls.values() if v and "sig=" in v),
         "has_unknown": sum(1 for v in urls.values() if v and "srcAg=UNKNOWN" in v),
     }
