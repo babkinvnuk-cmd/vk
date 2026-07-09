@@ -623,6 +623,85 @@ def _vkvideo_clean_media_url(url: str) -> str:
     return u
 
 
+def _vkvideo_collect_cdn_urls(obj, out: list):
+    if obj is None:
+        return
+    if isinstance(obj, dict):
+        for v in obj.values():
+            _vkvideo_collect_cdn_urls(v, out)
+    elif isinstance(obj, list):
+        for v in obj:
+            _vkvideo_collect_cdn_urls(v, out)
+    elif isinstance(obj, str):
+        s = _vkvideo_clean_media_url(obj)
+        if "vkuser.net" in s or "okcdn.ru" in s:
+            out.append(s)
+
+
+def _vkvideo_collect_m3u8_urls(obj, out: list):
+    if obj is None:
+        return
+    if isinstance(obj, dict):
+        for v in obj.values():
+            _vkvideo_collect_m3u8_urls(v, out)
+    elif isinstance(obj, list):
+        for v in obj:
+            _vkvideo_collect_m3u8_urls(v, out)
+    elif isinstance(obj, str):
+        s = _vkvideo_clean_media_url(obj)
+        if ".m3u8" in s:
+            out.append(s)
+
+
+def _vkvideo_prefer_full_urls(urls: dict, candidates: list) -> dict:
+    if not candidates:
+        return urls
+
+    type_to_key = {
+        0: "mp4_240",
+        1: "mp4_360",
+        2: "mp4_480",
+        3: "mp4_720",
+        4: "mp4_144",
+        5: "mp4_1080",
+    }
+
+    best = {}
+    for u in candidates:
+        try:
+            p = urlparse(u)
+            qs = p.query
+            t_m = re.search(r'(?:^|&)type=(\d+)(?:&|$)', qs)
+            if not t_m:
+                continue
+            t = int(t_m.group(1))
+            key = type_to_key.get(t)
+            if not key:
+                continue
+            pr = "pr=40" in qs
+            ct0 = "ct=0" in qs
+            ct19 = "ct=19" in qs
+            score = 0
+            if pr:
+                score += 4
+            if ct0:
+                score += 3
+            if ct19:
+                score -= 2
+            if key not in best or score > best[key][0]:
+                best[key] = (score, u)
+        except Exception:
+            continue
+
+    if not best:
+        return urls
+
+    out = dict(urls)
+    for key, (_score, u) in best.items():
+        out[key] = u
+    return out
+
+
 def _vkvideo_extract_urls_from_obj(obj, out: dict):
     if obj is None:
         return
@@ -729,6 +808,17 @@ async def _vkvideo_getforplay_urls(owner_id: int, video_id: int):
 
     urls = {}
     _vkvideo_extract_urls_from_obj(data, urls)
+    candidates = []
+    _vkvideo_collect_cdn_urls(data, candidates)
+    m3u8_candidates = []
+    _vkvideo_collect_m3u8_urls(data, m3u8_candidates)
+    if candidates:
+        meta["cdn_urls"] = list(dict.fromkeys(candidates))[:200]
+        urls = _vkvideo_prefer_full_urls(urls, candidates)
+    if m3u8_candidates:
+        meta["m3u8_urls"] = list(dict.fromkeys(m3u8_candidates))[:200]
+        if "hls" not in urls:
+            urls["hls"] = meta["m3u8_urls"][0]
 
     return urls, meta
 
@@ -787,6 +877,17 @@ async def _vkvideo_videoget_urls(owner_id: int, video_id: int):
 
     urls = {}
     _vkvideo_extract_urls_from_obj(data, urls)
+    candidates = []
+    _vkvideo_collect_cdn_urls(data, candidates)
+    m3u8_candidates = []
+    _vkvideo_collect_m3u8_urls(data, m3u8_candidates)
+    if candidates:
+        meta["cdn_urls"] = list(dict.fromkeys(candidates))[:400]
+        urls = _vkvideo_prefer_full_urls(urls, candidates)
+    if m3u8_candidates:
+        meta["m3u8_urls"] = list(dict.fromkeys(m3u8_candidates))[:400]
+        if "hls" not in urls:
+            urls["hls"] = meta["m3u8_urls"][0]
 
     return urls, meta
 
