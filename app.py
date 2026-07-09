@@ -570,8 +570,8 @@ async def vkvideo_upgrade_urls(owner_id: int, video_id: int):
         print(f"[upgrade] extracted {urls_count} URLs (sig:{has_sig}, subId:{has_subid}, unknown:{has_unknown})")
 
         result = {
-            "mp4_2160": urls.get("mp4_2160") or urls.get("mp4_1080"),
-            "mp4_1440": urls.get("mp4_1440") or urls.get("mp4_1080"),
+            "mp4_2160": urls.get("mp4_2160"),
+            "mp4_1440": urls.get("mp4_1440"),
             "mp4_1080": urls.get("mp4_1080"),
             "mp4_720": urls.get("mp4_720"),
             "mp4_480": urls.get("mp4_480"),
