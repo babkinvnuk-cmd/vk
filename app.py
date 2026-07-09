@@ -543,327 +543,83 @@ async def vkvideo_adult_search(q: str = "", offset: int = 0, count: int = 50):
 
 @app.get("/vkvideo/upgrade")
 async def vkvideo_upgrade_urls(owner_id: int, video_id: int):
-    """Получает рабочие URL для конкретного видео через multiple methods"""
+    """Получает рабочие URL для adult контента через player HTML extraction"""
     
     import json as _json
     
     print(f"[upgrade] START for {owner_id}_{video_id}")
     
-    token = await _get_vk_token()
-    if not token:
-        print(f"[upgrade] FAILED: no VK token")
-        return Response(content='{"error":"no_token"}', status_code=503,
-                        media_type="application/json", headers={"Access-Control-Allow-Origin": "*"})
-    
-    async with httpx.AsyncClient(timeout=15, follow_redirects=True) as client:
-        # МЕТОД 0: video.getByIds - РАБОТАЕТ ДЛЯ ADULT КОНТЕНТА!
-        try:
-            url = "https://api.vk.com/method/video.getByIds?v=5.282&client_id=52461373"
-            post_data = (
-                f"videos={owner_id}_{video_id}"
-                f"&video_fields=added,episodes,files,image,is_favorite,subtitles,timeline_thumbs,trailer,volume_multiplier"
-                f"&access_token={token}"
-            )
-            
-            print(f"[upgrade] METHOD 0: trying video.getByIds (api.vk.com)")
-            r = await client.post(url, 
-                content=post_data.encode(),
-                headers={
-                    "Content-Type": "application/x-www-form-urlencoded",
-                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-                    "Referer": "https://vkvideo.ru/",
-                    "Origin": "https://vkvideo.ru"
-                })
-            data = r.json()
-            items = data.get("response", {}).get("items", [])
-            
-            if items and len(items) > 0:
-                v = items[0]
-                files = v.get("files") or {}
-                
-                result = {
-                    "mp4_2160": files.get("mp4_2160"), "mp4_1440": files.get("mp4_1440"),
-                    "mp4_1080": files.get("mp4_1080"), "mp4_720": files.get("mp4_720"),
-                    "mp4_480": files.get("mp4_480"), "mp4_360": files.get("mp4_360"),
-                    "mp4_240": files.get("mp4_240"), "mp4_144": files.get("mp4_144"),
-                    "hls": files.get("hls"), "subtitles": v.get("subtitles") or [],
-                }
-                
-                urls_count = sum(1 for v in result.values() if v and isinstance(v, str))
-                chrome_count = sum(1 for v in result.values() if v and isinstance(v, str) and 'srcAg=CHROME' in v)
-                webkit_count = sum(1 for v in result.values() if v and isinstance(v, str) and 'srcAg=WEBKIT' in v)
-                unknown_count = sum(1 for v in result.values() if v and isinstance(v, str) and 'srcAg=UNKNOWN' in v)
-                
-                print(f"[upgrade] video.getByIds: returned {urls_count} URLs (CHROME:{chrome_count}, WEBKIT:{webkit_count}, UNKNOWN:{unknown_count})")
-                
-                # Если есть URLs с CHROME или WEBKIT - возвращаем сразу!
-                if chrome_count > 0 or webkit_count > 0:
-                    print(f"[upgrade] SUCCESS: video.getByIds returned proper srcAg URLs!")
-                    return Response(
-                        content=_json.dumps(result, ensure_ascii=False),
-                        media_type="application/json",
-                        headers={"Access-Control-Allow-Origin": "*"}
-                    )
-                elif urls_count > 0:
-                    print(f"[upgrade] WARNING: video.getByIds returned URLs with UNKNOWN srcAg")
-                    # Пробуем другие методы
-            else:
-                error = data.get('error', {})
-                print(f"[upgrade] video.getByIds failed: {error.get('error_msg', 'empty response')}")
-                
-        except Exception as e:
-            print(f"[upgrade] video.getByIds error: {e}")
+    # Player HTML extraction - единственный способ для adult контента
+    try:
+        player_url = f"https://vkvideo.ru/video_ext.php?oid={owner_id}&id={video_id}"
+        print(f"[upgrade] extracting from player: {player_url}")
         
-        # МЕТОД 1: video.getForPlay через POST - как делает браузер (обычно не работает для adult)
-        try:
-            url = "https://api.vkvideo.ru/method/video.getForPlay?v=5.282&client_id=52461373"
-            post_data = f"owner_id={owner_id}&video_id={video_id}&fields=skippable_parts%2Cis_serial&access_token={token}"
-            
-            print(f"[upgrade] METHOD 1: trying video.getForPlay POST (api.vkvideo.ru)")
-            r = await client.post(url, 
-                content=post_data.encode(),
-                headers={
-                    "Content-Type": "application/x-www-form-urlencoded",
-                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-                    "Referer": "https://vkvideo.ru/",
-                    "Origin": "https://vkvideo.ru"
-                })
-            data = r.json()
-            response_items = data.get("response", [])
-            
-            if response_items and len(response_items) > 0:
-                v = response_items[0]
-                files = v.get("files") or {}
-                
-                result = {
-                    "mp4_2160": files.get("mp4_2160"), "mp4_1440": files.get("mp4_1440"),
-                    "mp4_1080": files.get("mp4_1080"), "mp4_720": files.get("mp4_720"),
-                    "mp4_480": files.get("mp4_480"), "mp4_360": files.get("mp4_360"),
-                    "mp4_240": files.get("mp4_240"),
-                    "hls": files.get("hls"), "subtitles": v.get("subtitles") or [],
-                }
-                
-                urls_count = sum(1 for v in result.values() if v and isinstance(v, str))
-                webkit_count = sum(1 for v in result.values() if v and isinstance(v, str) and 'srcAg=WEBKIT' in v)
-                chrome_count = sum(1 for v in result.values() if v and isinstance(v, str) and 'srcAg=CHROME' in v)
-                unknown_count = sum(1 for v in result.values() if v and isinstance(v, str) and 'srcAg=UNKNOWN' in v)
-                
-                print(f"[upgrade] video.getForPlay: returned {urls_count} URLs (WEBKIT:{webkit_count}, CHROME:{chrome_count}, UNKNOWN:{unknown_count})")
-                
-                # Если есть URLs с WEBKIT или CHROME - возвращаем
-                if webkit_count > 0 or chrome_count > 0:
-                    print(f"[upgrade] SUCCESS: URLs with proper srcAg")
-                    return Response(
-                        content=_json.dumps(result, ensure_ascii=False),
-                        media_type="application/json",
-                        headers={"Access-Control-Allow-Origin": "*"}
-                    )
-                elif urls_count > 0:
-                    print(f"[upgrade] Got URLs but with UNKNOWN srcAg")
-            else:
-                error = data.get('error', {})
-                print(f"[upgrade] video.getForPlay failed: {error.get('error_msg', 'empty response')}")
-                
-        except Exception as e:
-            print(f"[upgrade] video.getForPlay error: {e}")
+        urls = await _extract_video_urls_from_player(player_url)
         
-        # МЕТОД 2: video.get с extended=1 - может вернуть URL с subId
-        try:
-            url = (
-                f"https://api.vk.com/method/video.get"
-                f"?v=5.131&access_token={token}"
-                f"&videos={owner_id}_{video_id}&extended=1"
-            )
-            print(f"[upgrade] METHOD 1: trying video.get with extended=1 (api.vk.com)")
-            r = await client.get(url, headers={
-                "User-Agent": "Mozilla/5.0",
-                "Referer": "https://vk.com/"
-            })
-            data = r.json()
-            items = data.get("response", {}).get("items", [])
+        if urls:
+            urls_count = len(urls)
+            has_sig = sum(1 for v in urls.values() if v and 'sig=' in v)
+            has_subid = sum(1 for v in urls.values() if v and 'subId=' in v)
+            print(f"[upgrade] extracted {urls_count} URLs (sig:{has_sig}, subId:{has_subid})")
             
-            if items:
-                v = items[0]
-                files = v.get("files") or {}
-                
-                result = {
-                    "mp4_2160": files.get("mp4_2160"), "mp4_1440": files.get("mp4_1440"),
-                    "mp4_1080": files.get("mp4_1080"), "mp4_720": files.get("mp4_720"),
-                    "mp4_480": files.get("mp4_480"), "mp4_360": files.get("mp4_360"),
-                    "mp4_240": files.get("mp4_240"),
-                    "hls": files.get("hls"), "subtitles": v.get("subtitles") or [],
-                }
-                
-                urls_count = sum(1 for v in result.values() if v and isinstance(v, str))
-                subid_count = sum(1 for v in result.values() if v and isinstance(v, str) and 'subId=' in v)
-                sig_count = sum(1 for v in result.values() if v and isinstance(v, str) and 'sig=' in v and 'subId=' not in v)
-                print(f"[upgrade] video.get extended: returned {urls_count} URLs ({subid_count} with subId, {sig_count} with sig only)")
-                
-                # Приоритет URL с subId
-                if subid_count > 0:
-                    print(f"[upgrade] SUCCESS: found URLs with subId")
-                    return Response(
-                        content=_json.dumps(result, ensure_ascii=False),
-                        media_type="application/json",
-                        headers={"Access-Control-Allow-Origin": "*"}
-                    )
-                elif urls_count > 0:
-                    print(f"[upgrade] WARNING: URLs without subId (may not work through proxy)")
-                    # Возвращаем но это может не работать
-                    return Response(
-                        content=_json.dumps(result, ensure_ascii=False),
-                        media_type="application/json",
-                        headers={"Access-Control-Allow-Origin": "*"}
-                    )
-            else:
-                error = data.get('error', {})
-                print(f"[upgrade] video.get extended failed: {error.get('error_msg', 'no items')}")
-                
-        except Exception as e:
-            print(f"[upgrade] video.get extended error: {e}")
-        
-        # МЕТОД 2: video.get с extended=1
-        try:
-            url = (
-                f"https://api.vk.com/method/video.get"
-                f"?v=5.131&access_token={token}"
-                f"&videos={owner_id}_{video_id}&extended=1"
-            )
-            print(f"[upgrade] METHOD 2: trying video.get with extended=1 (api.vk.com)")
-            r = await client.get(url, headers={
-                "User-Agent": "Mozilla/5.0",
-                "Referer": "https://vkvideo.ru/"
-            })
-            data = r.json()
-            items = data.get("response", {}).get("items", [])
+            result = {
+                "mp4_2160": urls.get("mp4_2160") or urls.get("mp4_1080"),
+                "mp4_1440": urls.get("mp4_1440") or urls.get("mp4_1080"),
+                "mp4_1080": urls.get("mp4_1080"),
+                "mp4_720": urls.get("mp4_720"),
+                "mp4_480": urls.get("mp4_480"),
+                "mp4_360": urls.get("mp4_360"),
+                "mp4_240": urls.get("mp4_240"),
+                "mp4_144": urls.get("mp4_144"),
+                "hls": urls.get("hls"),
+                "subtitles": []
+            }
             
-            if items:
-                v = items[0]
-                files = v.get("files") or {}
-                
-                result = {
-                    "mp4_2160": files.get("mp4_2160"), "mp4_1440": files.get("mp4_1440"),
-                    "mp4_1080": files.get("mp4_1080"), "mp4_720": files.get("mp4_720"),
-                    "mp4_480": files.get("mp4_480"), "mp4_360": files.get("mp4_360"),
-                    "mp4_240": files.get("mp4_240"),
-                    "hls": files.get("hls"), "subtitles": v.get("subtitles") or [],
-                }
-                
-                urls_count = sum(1 for v in result.values() if v and isinstance(v, str))
-                sig_count = sum(1 for v in result.values() if v and isinstance(v, str) and 'sig=' in v)
-                subid_count = sum(1 for v in result.values() if v and isinstance(v, str) and 'subId=' in v)
-                print(f"[upgrade] video.get: returned {urls_count} URLs ({sig_count} with sig, {subid_count} with subId)")
-                
-                # Если есть хоть один URL с sig/subId - возвращаем результат
-                if sig_count > 0 or subid_count > 0:
-                    return Response(
-                        content=_json.dumps(result, ensure_ascii=False),
-                        media_type="application/json",
-                        headers={"Access-Control-Allow-Origin": "*"}
-                    )
-                
-                print(f"[upgrade] video.get returned URLs but without sig/subId")
-            else:
-                print(f"[upgrade] video.get returned no items")
-                
-        except Exception as e:
-            import traceback
-            print(f"[upgrade] video.get error: {e}")
-            print(f"[upgrade] traceback: {traceback.format_exc()}")
-    
-    # МЕТОД 3: Парсинг player HTML
-    player_url = f"https://vk.com/video_ext.php?oid={owner_id}&id={video_id}&hd=2"
-    print(f"[upgrade] METHOD 3: trying player HTML: {player_url}")
-    
-    player_files = await _extract_video_urls_from_player(player_url)
-    
-    if player_files and len(player_files) > 0:
-        print(f"[upgrade] SUCCESS: extracted {len(player_files)} URLs from player HTML")
-        for key, url in player_files.items():
-            has_sig = 'sig=' in url if url else False
-            has_subid = 'subId=' in url if url else False
-            print(f"[upgrade]   {key}: {url[:80] if url else 'null'}... (sig={has_sig}, subId={has_subid})")
+            print(f"[upgrade] SUCCESS")
+            return Response(
+                content=_json.dumps(result, ensure_ascii=False),
+                media_type="application/json",
+                headers={"Access-Control-Allow-Origin": "*"}
+            )
+        else:
+            print(f"[upgrade] FAILED: no URLs found in player")
+            return Response(
+                content='{"error":"no_urls"}',
+                status_code=404,
+                media_type="application/json",
+                headers={"Access-Control-Allow-Origin": "*"}
+            )
+    except Exception as e:
+        print(f"[upgrade] ERROR: {e}")
         return Response(
-            content=_json.dumps(player_files, ensure_ascii=False),
+            content=f'{{"error":"{str(e)}"}}',
+            status_code=500,
+            media_type="application/json",
+            headers={"Access-Control-Allow-Origin": "*"}
+        )
+
+
+@app.get("/vkvideo/player")
+async def vkvideo_player_extract(player: str):
+    """Извлекает рабочие URL из встроенного плеера VK (с subId)"""
+    if not player:
+        return Response(
+            content=json.dumps({"error": "no player url"}),
+            status_code=400,
             media_type="application/json",
             headers={"Access-Control-Allow-Origin": "*"}
         )
     
-    print(f"[upgrade] FAILED: no working URLs found in all 3 methods")
-    return Response(content='{"error":"no working urls"}', status_code=404,
-                  media_type="application/json", headers={"Access-Control-Allow-Origin": "*"})
-
-
-@app.get("/vkmovie/search")
-async def vkmovie_search(q: str, kp: str = "", year: str = ""):
-    """Ищет фильм в VK Video по названию+год, возвращает прямые MP4 ссылки"""
-    token = await _get_vk_token()
-    if not token:
-        return Response(content='{"error":"no_token"}', status_code=503,
-                        media_type="application/json", headers={"Access-Control-Allow-Origin": "*"})
-    query = q
-    if year:
-        query = f"{q} {year}"
-    post_data = (
-        f"screen_ref=search_video_service&input_method=keyboard_search_button"
-        f"&q={httpx.QueryParams({'q': query})}&access_token={token}"
-    ).replace("q=q=", "q=")
-    # Правильное кодирование
-    import urllib.parse
-    post_data = (
-        "screen_ref=search_video_service&input_method=keyboard_search_button"
-        f"&q={urllib.parse.quote(query)}&access_token={token}"
-    )
-    async with httpx.AsyncClient(timeout=15, follow_redirects=True) as client:
-        r = await client.post(
-            VK_SEARCH_URL,
-            content=post_data.encode(),
-            headers={
-                "Content-Type": "application/x-www-form-urlencoded",
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-                "Origin": "https://vkvideo.ru",
-                "Referer": "https://vkvideo.ru/",
-            }
-        )
-    try:
-        data = r.json()
-    except Exception:
-        return Response(content='{"error":"parse"}', status_code=500,
-                        media_type="application/json", headers={"Access-Control-Allow-Origin": "*"})
-    videos = data.get("response", {}).get("catalog_videos", [])
-    # Фильтруем: duration > 3000, есть mp4, не трейлер/сериал
-    results = []
-    for item in videos:
-        v = item.get("video")
-        if not v:
-            continue
-        if v.get("duration", 0) < 3000:
-            continue
-        files = v.get("files") or {}
-        if not any(files.get(k) for k in ["mp4_2160", "mp4_1440", "mp4_1080", "mp4_720"]):
-            continue
-        title_lower = (v.get("title") or "").lower()
-        if any(w in title_lower for w in ["трейлер", "trailer", "сезон", "серия", "обзор"]):
-            continue
-        results.append({
-            "title": v.get("title"),
-            "duration": v.get("duration"),
-            "mp4_2160": files.get("mp4_2160"),
-            "mp4_1440": files.get("mp4_1440"),
-            "mp4_1080": files.get("mp4_1080"),
-            "mp4_720":  files.get("mp4_720"),
-            "mp4_480":  files.get("mp4_480"),
-            "mp4_360":  files.get("mp4_360"),
-            "hls":      files.get("hls"),
-            "subtitles": v.get("subtitles") or [],
-            "tracks":    v.get("tracks") or [],
-        })
-    import json
+    urls = await _extract_video_urls_from_player(player)
+    
     return Response(
-        content=json.dumps({"results": results}, ensure_ascii=False),
+        content=json.dumps({"files": urls}, ensure_ascii=False),
         media_type="application/json",
         headers={"Access-Control-Allow-Origin": "*"}
     )
+
+
+@app.api_route("/vkmovie/stream", methods=["GET", "HEAD"])
 
 
 
