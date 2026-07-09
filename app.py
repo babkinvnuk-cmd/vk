@@ -551,6 +551,9 @@ async def vkvideo_upgrade_urls(owner_id: int, video_id: int):
         if not urls:
             print(f"[upgrade] getForPlay empty, trying video.get")
             urls, _meta2 = await _vkvideo_videoget_urls(owner_id=owner_id, video_id=video_id)
+            m3u8s = (_meta2.get("m3u8_urls") or []) if isinstance(_meta2, dict) else []
+            if m3u8s and not urls.get("hls"):
+                urls["hls"] = m3u8s[0]
             if not urls:
                 print(f"[upgrade] FAILED: no URLs from video.get")
                 return Response(
@@ -644,6 +647,7 @@ async def _vkvideo_getforplay_urls(owner_id: int, video_id: int):
         return {}, {"error": "no_token"}
 
     url = f"https://api.vkvideo.ru/method/video.getForPlay?v=5.282&client_id={VK_CLIENT_ID}"
+    page_url = f"https://vkvideo.ru/video{owner_id}_{video_id}"
     post_data = (
         f"owner_id={owner_id}&video_id={video_id}"
         "&fields=skippable_parts%2Cis_serial"
@@ -651,6 +655,29 @@ async def _vkvideo_getforplay_urls(owner_id: int, video_id: int):
     )
 
     async with httpx.AsyncClient(timeout=20, follow_redirects=True) as client:
+        try:
+            await client.get(
+                "https://vkvideo.ru/",
+                headers={
+                    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                    "Accept-Encoding": "identity",
+                    "Accept-Language": "ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7",
+                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36",
+                },
+            )
+            await client.get(
+                page_url,
+                headers={
+                    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                    "Accept-Encoding": "identity",
+                    "Accept-Language": "ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7",
+                    "Referer": "https://vkvideo.ru/",
+                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36",
+                },
+            )
+        except Exception:
+            pass
+
         r = await client.post(
             url,
             content=post_data.encode(),
@@ -660,7 +687,7 @@ async def _vkvideo_getforplay_urls(owner_id: int, video_id: int):
                 "Accept-Language": "ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7",
                 "Content-Type": "application/x-www-form-urlencoded",
                 "Origin": "https://vkvideo.ru",
-                "Referer": "https://vkvideo.ru/",
+                "Referer": page_url,
                 "Sec-Fetch-Dest": "empty",
                 "Sec-Fetch-Mode": "cors",
                 "Sec-Fetch-Site": "same-site",
@@ -682,6 +709,7 @@ async def _vkvideo_getforplay_urls(owner_id: int, video_id: int):
         "content_type": r.headers.get("content-type", ""),
         "content_length": len(r.content or b""),
         "body_preview": text[:500],
+        "page_url": page_url,
     }
 
     if not text:
@@ -690,6 +718,10 @@ async def _vkvideo_getforplay_urls(owner_id: int, video_id: int):
     text = _vkvideo_strip_xssi(text)
     meta["body_stripped_preview"] = text[:500]
     meta["cdn_urls"] = list(dict.fromkeys(re.findall(r'https?://[^\s"\'<>\\\\]+(?:vkuser\\.net|okcdn\\.ru)[^\s"\'<>\\\\]*', text)))[:50]
+    meta["m3u8_urls"] = [
+        _vkvideo_clean_media_url(u)
+        for u in list(dict.fromkeys(re.findall(r'https?://[^\s"\'<>\\\\]+\\.m3u8[^\s"\'<>\\\\]*', text)))
+    ][:50]
     try:
         data = json.loads(text)
     except Exception:
@@ -744,6 +776,10 @@ async def _vkvideo_videoget_urls(owner_id: int, video_id: int):
     text = _vkvideo_strip_xssi(text)
     meta["body_stripped_preview"] = text[:500]
     meta["cdn_urls"] = list(dict.fromkeys(re.findall(r'https?://[^\s"\'<>\\\\]+(?:vkuser\\.net|okcdn\\.ru)[^\s"\'<>\\\\]*', text)))[:200]
+    meta["m3u8_urls"] = [
+        _vkvideo_clean_media_url(u)
+        for u in list(dict.fromkeys(re.findall(r'https?://[^\s"\'<>\\\\]+\\.m3u8[^\s"\'<>\\\\]*', text)))
+    ][:200]
     try:
         data = json.loads(text)
     except Exception:
@@ -766,6 +802,8 @@ async def vkvideo_getforplay_debug(owner_id: int, video_id: int):
         "urls_video_get": urls2,
         "cdn_urls": (meta.get("cdn_urls") or [])[:50],
         "cdn_urls_video_get": (meta2.get("cdn_urls") or [])[:200],
+        "m3u8_urls": (meta.get("m3u8_urls") or [])[:50],
+        "m3u8_urls_video_get": (meta2.get("m3u8_urls") or [])[:200],
         "has_sig": sum(1 for v in urls.values() if v and "sig=" in v),
         "has_unknown": sum(1 for v in urls.values() if v and "srcAg=UNKNOWN" in v),
     }
