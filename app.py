@@ -1129,34 +1129,41 @@ async def vkmovie_stream(request: Request):
     srcag_match = re.search(r'srcAg=([^&]+)', url)
     srcag = srcag_match.group(1) if srcag_match else "CHROME"
     
-    # Подбираем User-Agent в зависимости от srcAg
+    # Подбираем User-Agent и заголовки в зависимости от srcAg
     if srcag == "WEBKIT":
         user_agent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15"
-    elif srcag == "CHROME":
-        user_agent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36"
+        # Safari НЕ отправляет Sec-Ch-Ua и Sec-Fetch заголовки!
+        # Safari НЕ отправляет Origin для простых GET запросов к медиа!
+        req_headers = {
+            "Accept": "*/*",
+            "Accept-Encoding": "identity;q=1, *;q=0",
+            "Accept-Language": "ru-RU,ru;q=0.9",
+            "Connection": "keep-alive",
+            "Host": parsed_incoming.netloc,
+            "Referer": referer,
+            "User-Agent": user_agent,
+        }
     else:
-        # Для UNKNOWN и остальных пробуем Chrome
+        # Chrome отправляет все заголовки включая Origin
         user_agent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36"
+        req_headers = {
+            "Accept": "*/*",
+            "Accept-Encoding": "identity;q=1, *;q=0",
+            "Accept-Language": "ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7",
+            "Connection": "keep-alive",
+            "Host": parsed_incoming.netloc,
+            "Origin": origin,
+            "Referer": referer,
+            "Sec-Ch-Ua": '"Not(A:Brand";v="8", "Chromium";v="144", "Google Chrome";v="144"',
+            "Sec-Ch-Ua-Mobile": "?0",
+            "Sec-Ch-Ua-Platform": '"Windows"',
+            "Sec-Fetch-Dest": "video",
+            "Sec-Fetch-Mode": "cors",
+            "Sec-Fetch-Site": "cross-site",
+            "User-Agent": user_agent,
+        }
     
     print(f"[vkmovie/stream] Detected srcAg={srcag}, using User-Agent: {user_agent[:80]}...")
-
-    # Используем ТОЧНЫЕ заголовки из браузера Chrome (из работающего запроса пользователя)
-    req_headers = {
-        "Accept": "*/*",
-        "Accept-Encoding": "identity;q=1, *;q=0",
-        "Accept-Language": "ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7",
-        "Connection": "keep-alive",
-        "Host": parsed_incoming.netloc,  # Используем host из URL (vkvd694.okcdn.ru и т.д.)
-        "Origin": origin,
-        "Referer": referer,
-        "Sec-Ch-Ua": '"Not(A:Brand";v="8", "Chromium";v="144", "Google Chrome";v="144"',
-        "Sec-Ch-Ua-Mobile": "?0",
-        "Sec-Ch-Ua-Platform": '"Windows"',
-        "Sec-Fetch-Dest": "video",
-        "Sec-Fetch-Mode": "cors",
-        "Sec-Fetch-Site": "cross-site",
-        "User-Agent": user_agent,  # Используем UA соответствующий srcAg
-    }
     
     hf = str(request.base_url).rstrip("/").replace("http://", "https://")
 
