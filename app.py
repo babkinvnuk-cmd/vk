@@ -556,7 +556,65 @@ async def vkvideo_upgrade_urls(owner_id: int, video_id: int):
                         media_type="application/json", headers={"Access-Control-Allow-Origin": "*"})
     
     async with httpx.AsyncClient(timeout=15, follow_redirects=True) as client:
-        # МЕТОД 1: video.getForPlay через POST - как делает браузер
+        # МЕТОД 0: video.getByIds - РАБОТАЕТ ДЛЯ ADULT КОНТЕНТА!
+        try:
+            url = "https://api.vk.com/method/video.getByIds?v=5.282&client_id=52461373"
+            post_data = (
+                f"videos={owner_id}_{video_id}"
+                f"&video_fields=added,episodes,files,image,is_favorite,subtitles,timeline_thumbs,trailer,volume_multiplier"
+                f"&access_token={token}"
+            )
+            
+            print(f"[upgrade] METHOD 0: trying video.getByIds (api.vk.com)")
+            r = await client.post(url, 
+                content=post_data.encode(),
+                headers={
+                    "Content-Type": "application/x-www-form-urlencoded",
+                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+                    "Referer": "https://vkvideo.ru/",
+                    "Origin": "https://vkvideo.ru"
+                })
+            data = r.json()
+            items = data.get("response", {}).get("items", [])
+            
+            if items and len(items) > 0:
+                v = items[0]
+                files = v.get("files") or {}
+                
+                result = {
+                    "mp4_2160": files.get("mp4_2160"), "mp4_1440": files.get("mp4_1440"),
+                    "mp4_1080": files.get("mp4_1080"), "mp4_720": files.get("mp4_720"),
+                    "mp4_480": files.get("mp4_480"), "mp4_360": files.get("mp4_360"),
+                    "mp4_240": files.get("mp4_240"), "mp4_144": files.get("mp4_144"),
+                    "hls": files.get("hls"), "subtitles": v.get("subtitles") or [],
+                }
+                
+                urls_count = sum(1 for v in result.values() if v and isinstance(v, str))
+                chrome_count = sum(1 for v in result.values() if v and isinstance(v, str) and 'srcAg=CHROME' in v)
+                webkit_count = sum(1 for v in result.values() if v and isinstance(v, str) and 'srcAg=WEBKIT' in v)
+                unknown_count = sum(1 for v in result.values() if v and isinstance(v, str) and 'srcAg=UNKNOWN' in v)
+                
+                print(f"[upgrade] video.getByIds: returned {urls_count} URLs (CHROME:{chrome_count}, WEBKIT:{webkit_count}, UNKNOWN:{unknown_count})")
+                
+                # Если есть URLs с CHROME или WEBKIT - возвращаем сразу!
+                if chrome_count > 0 or webkit_count > 0:
+                    print(f"[upgrade] SUCCESS: video.getByIds returned proper srcAg URLs!")
+                    return Response(
+                        content=_json.dumps(result, ensure_ascii=False),
+                        media_type="application/json",
+                        headers={"Access-Control-Allow-Origin": "*"}
+                    )
+                elif urls_count > 0:
+                    print(f"[upgrade] WARNING: video.getByIds returned URLs with UNKNOWN srcAg")
+                    # Пробуем другие методы
+            else:
+                error = data.get('error', {})
+                print(f"[upgrade] video.getByIds failed: {error.get('error_msg', 'empty response')}")
+                
+        except Exception as e:
+            print(f"[upgrade] video.getByIds error: {e}")
+        
+        # МЕТОД 1: video.getForPlay через POST - как делает браузер (обычно не работает для adult)
         try:
             url = "https://api.vkvideo.ru/method/video.getForPlay?v=5.282&client_id=52461373"
             post_data = f"owner_id={owner_id}&video_id={video_id}&fields=skippable_parts%2Cis_serial&access_token={token}"
