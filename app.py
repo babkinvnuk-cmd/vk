@@ -1018,9 +1018,18 @@ async def vkmovie_stream(request: Request):
     print(f"[vkmovie/stream] Using referer: {repr(referer)}, origin: {repr(origin)}")
 
     req_headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36",
         "Referer": referer,
         "Origin": origin,
+        "Accept": "*/*",
+        "Accept-Encoding": "identity;q=1, *;q=0",
+        "Accept-Language": "ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7",
+        "Sec-Fetch-Dest": "video",
+        "Sec-Fetch-Mode": "cors",
+        "Sec-Fetch-Site": "cross-site",
+        "Sec-Ch-Ua": '"Not(A:Brand";v="8", "Chromium";v="144", "Google Chrome";v="144"',
+        "Sec-Ch-Ua-Mobile": "?0",
+        "Sec-Ch-Ua-Platform": '"Windows"',
     }
     
     hf = str(request.base_url).rstrip("/").replace("http://", "https://")
