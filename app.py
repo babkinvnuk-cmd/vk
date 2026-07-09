@@ -384,10 +384,12 @@ _porn_owners = set([
     -211231029, -27477591, -216486929,
 ])
 _porn_owners_loaded = False
+_porn_owner_titles = {}
+_porn_owner_title_cache = {}
 
 def _load_owners_from_file():
     """Читає owner_id з owners.txt"""
-    global _porn_owners
+    global _porn_owners, _porn_owner_titles, _porn_owner_title_cache
     try:
         owners_file = os.path.join(os.path.dirname(__file__), 'owners.txt')
         if os.path.exists(owners_file):
@@ -396,7 +398,16 @@ def _load_owners_from_file():
                     line = line.strip()
                     if line and not line.startswith('#'):
                         try:
-                            _porn_owners.add(int(line))
+                            if "|" in line:
+                                parts = line.split("|", 1)
+                                oid = int(parts[0].strip())
+                                title = parts[1].strip()
+                                _porn_owners.add(oid)
+                                if title:
+                                    _porn_owner_titles[oid] = title
+                                    _porn_owner_title_cache[oid] = title
+                            else:
+                                _porn_owners.add(int(line))
                         except ValueError:
                             pass
             print(f"[owners] loaded {len(_porn_owners)} owners from file")
@@ -444,7 +455,7 @@ async def vkvideo_debug(q: str = "anal"):
 
 
 @app.get("/vkvideo/adult")
-async def vkvideo_adult_search(q: str = "", offset: int = 0, count: int = 50):
+async def vkvideo_adult_search(q: str = "", offset: int = 0, count: int = 50, owners: str = ""):
     """Пошук відео по всіх паблікам з owners.txt"""
     if not q:
         return Response(content='{"error":"no query"}', status_code=400,
@@ -461,6 +472,18 @@ async def vkvideo_adult_search(q: str = "", offset: int = 0, count: int = 50):
     q_words = [w.lower() for w in q.lower().split() if len(w) > 2]
 
     all_owners = list(_porn_owners)
+    if owners:
+        try:
+            parsed = []
+            for part in str(owners).split(","):
+                p = part.strip()
+                if not p:
+                    continue
+                parsed.append(int(p))
+            if parsed:
+                all_owners = [oid for oid in parsed if oid in _porn_owners]
+        except Exception:
+            pass
     print(f"[adult] searching q='{q}' across {len(all_owners)} owners")
 
     async with httpx.AsyncClient(timeout=30, follow_redirects=True) as client:
@@ -536,6 +559,85 @@ async def vkvideo_adult_search(q: str = "", offset: int = 0, count: int = 50):
 
     return Response(
         content=_json.dumps({"items": paginated, "count": len(results), "offset": offset}, ensure_ascii=False),
+        media_type="application/json",
+        headers={"Access-Control-Allow-Origin": "*"}
+    )
+
+
+async def _vkvideo_owner_title(owner_id: int, token: str, client: httpx.AsyncClient) -> str:
+    if owner_id in _porn_owner_title_cache:
+        return _porn_owner_title_cache.get(owner_id) or str(owner_id)
+
+    gid = abs(int(owner_id))
+    candidates = [
+        f"https://api.vkvideo.ru/method/groups.getById?v=5.264&client_id={VK_CLIENT_ID}&group_id={gid}&access_token={token}",
+        f"https://api.vk.com/method/groups.getById?v=5.131&group_id={gid}&access_token={token}",
+        f"https://api.vkvideo.ru/method/video.get?v=5.264&client_id={VK_CLIENT_ID}&owner_id={owner_id}&count=1&extended=1&access_token={token}",
+    ]
+
+    title = ""
+    for u in candidates:
+        try:
+            r = await client.get(u, headers={"User-Agent": "Mozilla/5.0", "Referer": "https://vkvideo.ru/"})
+            data = r.json()
+        except Exception:
+            continue
+
+        try:
+            resp = data.get("response")
+        except Exception:
+            resp = None
+
+        if isinstance(resp, list) and resp:
+            t = resp[0].get("name") if isinstance(resp[0], dict) else ""
+            if t:
+                title = t
+                break
+        if isinstance(resp, dict):
+            groups = resp.get("groups")
+            if isinstance(groups, list) and groups:
+                t = groups[0].get("name") if isinstance(groups[0], dict) else ""
+                if t:
+                    title = t
+                    break
+            items = resp.get("items")
+            if isinstance(items, list):
+                gs = resp.get("groups")
+                if isinstance(gs, list) and gs:
+                    t = gs[0].get("name") if isinstance(gs[0], dict) else ""
+                    if t:
+                        title = t
+                        break
+
+    if not title:
+        title = str(owner_id)
+
+    _porn_owner_title_cache[owner_id] = title
+    return title
+
+
+@app.get("/vkvideo/channels")
+async def vkvideo_channels():
+    import json as _json
+    token = await _get_vk_token()
+    if not token:
+        return Response(content='{"error":"no_token"}', status_code=503,
+                        media_type="application/json", headers={"Access-Control-Allow-Origin": "*"})
+
+    owners = sorted(list(_porn_owners))
+    import asyncio
+    sem = asyncio.Semaphore(6)
+
+    async with httpx.AsyncClient(timeout=12, follow_redirects=True) as client:
+        async def one(oid: int):
+            async with sem:
+                t = await _vkvideo_owner_title(oid, token, client)
+                return {"owner_id": oid, "title": t}
+
+        items = await asyncio.gather(*[one(oid) for oid in owners])
+
+    return Response(
+        content=_json.dumps({"items": items, "count": len(items)}, ensure_ascii=False),
         media_type="application/json",
         headers={"Access-Control-Allow-Origin": "*"}
     )
