@@ -982,6 +982,24 @@ async def vkmovie_stream(request: Request):
     url = url.strip().replace("`", "").strip().strip('"').strip("'").strip()
     print(f"[vkmovie/stream] Request: method={request.method}, url={repr(url)}, raw query={repr(raw_query)}")
 
+    # КРИТИЧНО: VK проверяет что srcIp в URL совпадает с IP клиента
+    # Но запрос идёт с прокси-сервера, не от клиента
+    # Поэтому УДАЛЯЕМ srcIp из URL - VK сам подставит IP прокси
+    from urllib.parse import parse_qs, urlencode
+    parsed_url = urlparse(url)
+    if parsed_url.query:
+        query_params = parse_qs(parsed_url.query, keep_blank_values=True)
+        # Удаляем srcIp если есть
+        if 'srcIp' in query_params:
+            del query_params['srcIp']
+            print(f"[vkmovie/stream] Removed srcIp from URL")
+        # Собираем URL обратно
+        new_query = urlencode(query_params, doseq=True)
+        url = f"{parsed_url.scheme}://{parsed_url.netloc}{parsed_url.path}?{new_query}"
+        if parsed_url.fragment:
+            url += f"#{parsed_url.fragment}"
+        print(f"[vkmovie/stream] URL after srcIp removal: {url[:120]}...")
+
     parsed_incoming = urlparse(url)
     # Убрали редирект на HuggingFace - всё проксируем через Render напрямую
     # (раньше тут был редирект на OKCDN_UPSTREAM для okcdn.ru и vkuser.net)
