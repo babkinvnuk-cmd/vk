@@ -639,11 +639,19 @@ async def _vkvideo_getforplay_urls(owner_id: int, video_id: int):
             url,
             content=post_data.encode(),
             headers={
+                "Accept": "*/*",
+                "Accept-Encoding": "identity",
+                "Accept-Language": "ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7",
                 "Content-Type": "application/x-www-form-urlencoded",
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
                 "Origin": "https://vkvideo.ru",
                 "Referer": "https://vkvideo.ru/",
-                "Accept": "*/*",
+                "Sec-Fetch-Dest": "empty",
+                "Sec-Fetch-Mode": "cors",
+                "Sec-Fetch-Site": "same-site",
+                "Sec-Ch-Ua": '"Not(A:Brand";v="8", "Chromium";v="144", "Google Chrome";v="144"',
+                "Sec-Ch-Ua-Mobile": "?0",
+                "Sec-Ch-Ua-Platform": '"Windows"',
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36",
             },
         )
 
@@ -657,12 +665,14 @@ async def _vkvideo_getforplay_urls(owner_id: int, video_id: int):
         "status_code": r.status_code,
         "content_type": r.headers.get("content-type", ""),
         "content_length": len(r.content or b""),
+        "body_preview": text[:500],
     }
 
     if not text:
         return {}, meta
 
     text = _vkvideo_strip_xssi(text)
+    meta["body_stripped_preview"] = text[:500]
     try:
         data = json.loads(text)
     except Exception:
