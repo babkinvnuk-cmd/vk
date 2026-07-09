@@ -543,56 +543,60 @@ async def vkvideo_upgrade_urls(owner_id: int, video_id: int):
                         media_type="application/json", headers={"Access-Control-Allow-Origin": "*"})
     
     async with httpx.AsyncClient(timeout=15, follow_redirects=True) as client:
-        # МЕТОД 1: video.getForPlay - специальный API для получения URL для воспроизведения
+        # МЕТОД 1: video.get с extended=1 - может вернуть URL с subId
         try:
-            # Пробуем через POST с form data (как делает официальный клиент)
-            for_play_url = f"https://api.vkvideo.ru/method/video.getForPlay?v=5.282&client_id={VK_CLIENT_ID}"
-            post_data = f"videos={owner_id}_{video_id}&access_token={token}"
-            
-            print(f"[upgrade] METHOD 1: trying video.getForPlay (POST)")
-            r = await client.post(
-                for_play_url,
-                content=post_data.encode(),
-                headers={
-                    "Content-Type": "application/x-www-form-urlencoded",
-                    "User-Agent": "Mozilla/5.0",
-                    "Referer": "https://vkvideo.ru/",
-                    "Origin": "https://vkvideo.ru"
-                }
+            url = (
+                f"https://api.vk.com/method/video.get"
+                f"?v=5.131&access_token={token}"
+                f"&videos={owner_id}_{video_id}&extended=1"
             )
+            print(f"[upgrade] METHOD 1: trying video.get with extended=1 (api.vk.com)")
+            r = await client.get(url, headers={
+                "User-Agent": "Mozilla/5.0",
+                "Referer": "https://vk.com/"
+            })
             data = r.json()
+            items = data.get("response", {}).get("items", [])
             
-            if 'response' in data and 'items' in data['response'] and len(data['response']['items']) > 0:
-                item = data['response']['items'][0]
-                files = item.get("files") or {}
+            if items:
+                v = items[0]
+                files = v.get("files") or {}
                 
                 result = {
                     "mp4_2160": files.get("mp4_2160"), "mp4_1440": files.get("mp4_1440"),
                     "mp4_1080": files.get("mp4_1080"), "mp4_720": files.get("mp4_720"),
                     "mp4_480": files.get("mp4_480"), "mp4_360": files.get("mp4_360"),
                     "mp4_240": files.get("mp4_240"),
-                    "hls": files.get("hls"), "subtitles": item.get("subtitles") or [],
+                    "hls": files.get("hls"), "subtitles": v.get("subtitles") or [],
                 }
                 
                 urls_count = sum(1 for v in result.values() if v and isinstance(v, str))
-                sig_count = sum(1 for v in result.values() if v and isinstance(v, str) and 'sig=' in v)
                 subid_count = sum(1 for v in result.values() if v and isinstance(v, str) and 'subId=' in v)
-                print(f"[upgrade] getForPlay: returned {urls_count} URLs ({sig_count} with sig, {subid_count} with subId)")
+                sig_count = sum(1 for v in result.values() if v and isinstance(v, str) and 'sig=' in v and 'subId=' not in v)
+                print(f"[upgrade] video.get extended: returned {urls_count} URLs ({subid_count} with subId, {sig_count} with sig only)")
                 
-                # Если есть хоть один рабочий URL (с sig или subId) - возвращаем
-                if sig_count > 0 or subid_count > 0:
+                # Приоритет URL с subId
+                if subid_count > 0:
+                    print(f"[upgrade] SUCCESS: found URLs with subId")
                     return Response(
                         content=_json.dumps(result, ensure_ascii=False),
                         media_type="application/json",
                         headers={"Access-Control-Allow-Origin": "*"}
                     )
-                print(f"[upgrade] getForPlay returned URLs but without sig/subId")
+                elif urls_count > 0:
+                    print(f"[upgrade] WARNING: URLs without subId (may not work through proxy)")
+                    # Возвращаем но это может не работать
+                    return Response(
+                        content=_json.dumps(result, ensure_ascii=False),
+                        media_type="application/json",
+                        headers={"Access-Control-Allow-Origin": "*"}
+                    )
             else:
                 error = data.get('error', {})
-                print(f"[upgrade] getForPlay failed: {error.get('error_msg', 'no items')}")
+                print(f"[upgrade] video.get extended failed: {error.get('error_msg', 'no items')}")
                 
         except Exception as e:
-            print(f"[upgrade] getForPlay error: {e}")
+            print(f"[upgrade] video.get extended error: {e}")
         
         # МЕТОД 2: video.get через vkvideo.ru API
         try:
@@ -982,25 +986,20 @@ async def vkmovie_stream(request: Request):
     url = url.strip().replace("`", "").strip().strip('"').strip("'").strip()
     print(f"[vkmovie/stream] Request: method={request.method}, url={repr(url)}, raw query={repr(raw_query)}")
 
-    # КРИТИЧНО: VK проверяет что srcIp в URL совпадает с IP клиента
-    # Но запрос идёт с прокси-сервера, не от клиента
-    # Поэтому УДАЛЯЕМ srcIp из URL - VK сам подставит IP прокси
-    from urllib.parse import parse_qs, urlencode
-    parsed_url = urlparse(url)
-    if parsed_url.query:
-        query_params = parse_qs(parsed_url.query, keep_blank_values=True)
-        # Удаляем srcIp если есть
-        if 'srcIp' in query_params:
-            del query_params['srcIp']
-            print(f"[vkmovie/stream] Removed srcIp from URL")
-        # Собираем URL обратно
-        new_query = urlencode(query_params, doseq=True)
-        url = f"{parsed_url.scheme}://{parsed_url.netloc}{parsed_url.path}?{new_query}"
-        if parsed_url.fragment:
-            url += f"#{parsed_url.fragment}"
-        print(f"[vkmovie/stream] URL after srcIp removal: {url[:120]}...")
-
+    # ИСПРАВЛЕНИЕ: Если URL содержит /video.m3u8, убираем это из пути
+    # VK возвращает URLs типа https://vk6-13.vkuser.net/video.m3u8?sig=...
+    # Но рабочие URLs типа https://vk6-13.vkuser.net/?subId=...&sig=...
+    # Убираем /video.m3u8 чтобы получить редирект на правильный URL с subId
     parsed_incoming = urlparse(url)
+    if parsed_incoming.netloc.endswith('.vkuser.net') and '/video.m3u8' in parsed_incoming.path:
+        # Заменяем /video.m3u8 на / сохраняя query parameters
+        url = url.replace('/video.m3u8?', '/?')
+        print(f"[vkmovie/stream] TRANSFORMED URL (removed /video.m3u8): {repr(url)}")
+        parsed_incoming = urlparse(url)
+    
+    # НЕ трогаем srcIp - подпись sig вычислена с ним, изменение сломает валидацию
+    # Пробуем просто проксировать с правильными заголовками
+
     # Убрали редирект на HuggingFace - всё проксируем через Render напрямую
     # (раньше тут был редирект на OKCDN_UPSTREAM для okcdn.ru и vkuser.net)
 
