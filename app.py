@@ -545,29 +545,85 @@ async def vkvideo_adult_search(q: str = "", offset: int = 0, count: int = 50):
 async def vkvideo_upgrade_urls(owner_id: int, video_id: int):
     """Получает рабочие URL через video.getForPlay"""
     import json as _json
+    import asyncio
+    import time
     print(f"[upgrade] START for {owner_id}_{video_id}")
     try:
-        urls, _meta = await _vkvideo_getforplay_urls(owner_id=owner_id, video_id=video_id)
+        t0 = time.perf_counter()
+        task_vg = asyncio.create_task(_vkvideo_videoget_urls(owner_id=owner_id, video_id=video_id))
+        task_gfp = asyncio.create_task(_vkvideo_getforplay_urls(owner_id=owner_id, video_id=video_id))
+
+        urls = {}
+        meta = {}
+        src = ""
+
+        done, pending = await asyncio.wait({task_vg, task_gfp}, return_when=asyncio.FIRST_COMPLETED)
+
+        if task_gfp in done:
+            try:
+                gfp_urls, gfp_meta = task_gfp.result()
+            except Exception:
+                gfp_urls, gfp_meta = {}, {}
+            if gfp_urls:
+                urls, meta, src = gfp_urls, gfp_meta, "getForPlay"
+                task_vg.cancel()
+
+        if not urls and task_vg in done:
+            try:
+                vg_urls, vg_meta = task_vg.result()
+            except Exception:
+                vg_urls, vg_meta = {}, {}
+            if vg_urls:
+                urls, meta, src = vg_urls, vg_meta, "video.get"
+                task_gfp.cancel()
+
         if not urls:
-            print(f"[upgrade] getForPlay empty, trying video.get")
-            urls, _meta2 = await _vkvideo_videoget_urls(owner_id=owner_id, video_id=video_id)
-            m3u8s = (_meta2.get("m3u8_urls") or []) if isinstance(_meta2, dict) else []
-            if m3u8s and not urls.get("hls"):
-                urls["hls"] = m3u8s[0]
-            if not urls:
-                print(f"[upgrade] FAILED: no URLs from video.get")
-                return Response(
-                    content='{"error":"no_urls"}',
-                    status_code=404,
-                    media_type="application/json",
-                    headers={"Access-Control-Allow-Origin": "*"}
-                )
+            other = None
+            if task_vg in pending:
+                other = task_vg
+            elif task_gfp in pending:
+                other = task_gfp
+
+            if other is not None:
+                try:
+                    urls2, meta2 = await asyncio.wait_for(other, timeout=6)
+                except Exception:
+                    urls2, meta2 = {}, {}
+                if urls2:
+                    urls, meta = urls2, meta2
+                    src = "video.get" if other is task_vg else "getForPlay"
+
+        try:
+            if not task_vg.done():
+                task_vg.cancel()
+        except Exception:
+            pass
+        try:
+            if not task_gfp.done():
+                task_gfp.cancel()
+        except Exception:
+            pass
+
+        m3u8s = (meta.get("m3u8_urls") or []) if isinstance(meta, dict) else []
+        if m3u8s and not urls.get("hls"):
+            urls["hls"] = m3u8s[0]
+
+        dt = time.perf_counter() - t0
+
+        if not urls:
+            print(f"[upgrade] FAILED: no URLs (t={dt:.2f}s)")
+            return Response(
+                content='{"error":"no_urls"}',
+                status_code=404,
+                media_type="application/json",
+                headers={"Access-Control-Allow-Origin": "*"}
+            )
 
         urls_count = len(urls)
         has_sig = sum(1 for v in urls.values() if v and 'sig=' in v)
         has_subid = sum(1 for v in urls.values() if v and 'subId=' in v)
         has_unknown = sum(1 for v in urls.values() if v and 'srcAg=UNKNOWN' in v)
-        print(f"[upgrade] extracted {urls_count} URLs (sig:{has_sig}, subId:{has_subid}, unknown:{has_unknown})")
+        print(f"[upgrade] extracted {urls_count} URLs via {src} (t={dt:.2f}s) (sig:{has_sig}, subId:{has_subid}, unknown:{has_unknown})")
 
         result = {
             "mp4_2160": urls.get("mp4_2160"),
@@ -733,7 +789,7 @@ async def _vkvideo_getforplay_urls(owner_id: int, video_id: int):
         f"&access_token={token}"
     )
 
-    async with httpx.AsyncClient(timeout=20, follow_redirects=True) as client:
+    async with httpx.AsyncClient(timeout=8, follow_redirects=True) as client:
         try:
             await client.get(
                 "https://vkvideo.ru/",
