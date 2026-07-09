@@ -689,6 +689,7 @@ async def _vkvideo_getforplay_urls(owner_id: int, video_id: int):
 
     text = _vkvideo_strip_xssi(text)
     meta["body_stripped_preview"] = text[:500]
+    meta["cdn_urls"] = list(dict.fromkeys(re.findall(r'https?://[^\s"\'<>\\\\]+(?:vkuser\\.net|okcdn\\.ru)[^\s"\'<>\\\\]*', text)))[:50]
     try:
         data = json.loads(text)
     except Exception:
@@ -742,6 +743,7 @@ async def _vkvideo_videoget_urls(owner_id: int, video_id: int):
 
     text = _vkvideo_strip_xssi(text)
     meta["body_stripped_preview"] = text[:500]
+    meta["cdn_urls"] = list(dict.fromkeys(re.findall(r'https?://[^\s"\'<>\\\\]+(?:vkuser\\.net|okcdn\\.ru)[^\s"\'<>\\\\]*', text)))[:200]
     try:
         data = json.loads(text)
     except Exception:
@@ -762,6 +764,8 @@ async def vkvideo_getforplay_debug(owner_id: int, video_id: int):
         "urls": urls,
         "meta_video_get": meta2,
         "urls_video_get": urls2,
+        "cdn_urls": (meta.get("cdn_urls") or [])[:50],
+        "cdn_urls_video_get": (meta2.get("cdn_urls") or [])[:200],
         "has_sig": sum(1 for v in urls.values() if v and "sig=" in v),
         "has_unknown": sum(1 for v in urls.values() if v and "srcAg=UNKNOWN" in v),
     }
@@ -1010,6 +1014,84 @@ async def vkvideo_player_extract(player: str):
         media_type="application/json",
         headers={"Access-Control-Allow-Origin": "*"}
     )
+
+
+@app.get("/vkmovie/probe")
+async def vkmovie_probe(request: Request):
+    raw_query = str(request.url.query)
+    url = None
+    if raw_query.startswith("url="):
+        url_part = raw_query[4:]
+        if "&" in url_part:
+            url_part = url_part.split("&")[0]
+        url = unquote(url_part)
+
+    if not url:
+        return Response(content='{"error":"no_url"}', status_code=400, media_type="application/json", headers={"Access-Control-Allow-Origin": "*"})
+
+    url = url.strip().replace("`", "").strip().strip('"').strip("'").strip()
+    for _ in range(2):
+        url2 = unquote(url)
+        if url2 == url:
+            break
+        url = url2
+    url = url.strip().replace("`", "").strip().strip('"').strip("'").strip()
+
+    parsed_incoming = urlparse(url)
+    referer = "https://vkvideo.ru/"
+    origin = "https://vkvideo.ru"
+
+    srcag_match = re.search(r"srcAg=([^&]+)", url)
+    srcag = srcag_match.group(1) if srcag_match else "CHROME"
+
+    if srcag == "WEBKIT":
+        user_agent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15"
+        req_headers = {
+            "Accept": "*/*",
+            "Accept-Encoding": "identity;q=1, *;q=0",
+            "Accept-Language": "ru-RU,ru;q=0.9",
+            "Connection": "keep-alive",
+            "Host": parsed_incoming.netloc,
+            "Referer": referer,
+            "User-Agent": user_agent,
+        }
+    else:
+        user_agent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36"
+        req_headers = {
+            "Accept": "*/*",
+            "Accept-Encoding": "identity;q=1, *;q=0",
+            "Accept-Language": "ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7",
+            "Connection": "keep-alive",
+            "Host": parsed_incoming.netloc,
+            "Origin": origin,
+            "Referer": referer,
+            "Sec-Ch-Ua": '"Not(A:Brand";v="8", "Chromium";v="144", "Google Chrome";v="144"',
+            "Sec-Ch-Ua-Mobile": "?0",
+            "Sec-Ch-Ua-Platform": '"Windows"',
+            "Sec-Fetch-Dest": "video",
+            "Sec-Fetch-Mode": "cors",
+            "Sec-Fetch-Site": "cross-site",
+            "User-Agent": user_agent,
+        }
+
+    async with httpx.AsyncClient(timeout=15, follow_redirects=True) as client:
+        r = await client.get(url, headers={**req_headers, "range": "bytes=0-2047"})
+
+    ct = r.headers.get("content-type", "")
+    cr = r.headers.get("content-range", "")
+    cl = r.headers.get("content-length", "")
+    head = r.content[:64]
+
+    result = {
+        "status_code": r.status_code,
+        "content_type": ct,
+        "content_range": cr,
+        "content_length": cl,
+        "head_hex": head.hex(),
+        "head_ascii": head.decode("latin1", errors="ignore"),
+    }
+
+    return Response(content=json.dumps(result, ensure_ascii=False), media_type="application/json", headers={"Access-Control-Allow-Origin": "*"})
 
 
 @app.api_route("/vkmovie/stream", methods=["GET", "HEAD"])
