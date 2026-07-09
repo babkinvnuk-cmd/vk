@@ -543,7 +543,60 @@ async def vkvideo_upgrade_urls(owner_id: int, video_id: int):
                         media_type="application/json", headers={"Access-Control-Allow-Origin": "*"})
     
     async with httpx.AsyncClient(timeout=15, follow_redirects=True) as client:
-        # МЕТОД 1: video.get с extended=1 - может вернуть URL с subId
+        # МЕТОД 1: video.getForPlay через POST - как делает браузер
+        try:
+            url = "https://api.vkvideo.ru/method/video.getForPlay?v=5.282&client_id=52461373"
+            post_data = f"owner_id={owner_id}&video_id={video_id}&fields=skippable_parts%2Cis_serial&access_token={token}"
+            
+            print(f"[upgrade] METHOD 1: trying video.getForPlay POST (api.vkvideo.ru)")
+            r = await client.post(url, 
+                content=post_data.encode(),
+                headers={
+                    "Content-Type": "application/x-www-form-urlencoded",
+                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+                    "Referer": "https://vkvideo.ru/",
+                    "Origin": "https://vkvideo.ru"
+                })
+            data = r.json()
+            response_items = data.get("response", [])
+            
+            if response_items and len(response_items) > 0:
+                v = response_items[0]
+                files = v.get("files") or {}
+                
+                result = {
+                    "mp4_2160": files.get("mp4_2160"), "mp4_1440": files.get("mp4_1440"),
+                    "mp4_1080": files.get("mp4_1080"), "mp4_720": files.get("mp4_720"),
+                    "mp4_480": files.get("mp4_480"), "mp4_360": files.get("mp4_360"),
+                    "mp4_240": files.get("mp4_240"),
+                    "hls": files.get("hls"), "subtitles": v.get("subtitles") or [],
+                }
+                
+                urls_count = sum(1 for v in result.values() if v and isinstance(v, str))
+                webkit_count = sum(1 for v in result.values() if v and isinstance(v, str) and 'srcAg=WEBKIT' in v)
+                chrome_count = sum(1 for v in result.values() if v and isinstance(v, str) and 'srcAg=CHROME' in v)
+                unknown_count = sum(1 for v in result.values() if v and isinstance(v, str) and 'srcAg=UNKNOWN' in v)
+                
+                print(f"[upgrade] video.getForPlay: returned {urls_count} URLs (WEBKIT:{webkit_count}, CHROME:{chrome_count}, UNKNOWN:{unknown_count})")
+                
+                # Если есть URLs с WEBKIT или CHROME - возвращаем
+                if webkit_count > 0 or chrome_count > 0:
+                    print(f"[upgrade] SUCCESS: URLs with proper srcAg")
+                    return Response(
+                        content=_json.dumps(result, ensure_ascii=False),
+                        media_type="application/json",
+                        headers={"Access-Control-Allow-Origin": "*"}
+                    )
+                elif urls_count > 0:
+                    print(f"[upgrade] Got URLs but with UNKNOWN srcAg")
+            else:
+                error = data.get('error', {})
+                print(f"[upgrade] video.getForPlay failed: {error.get('error_msg', 'empty response')}")
+                
+        except Exception as e:
+            print(f"[upgrade] video.getForPlay error: {e}")
+        
+        # МЕТОД 2: video.get с extended=1 - может вернуть URL с subId
         try:
             url = (
                 f"https://api.vk.com/method/video.get"
@@ -598,14 +651,14 @@ async def vkvideo_upgrade_urls(owner_id: int, video_id: int):
         except Exception as e:
             print(f"[upgrade] video.get extended error: {e}")
         
-        # МЕТОД 2: video.get через vkvideo.ru API
+        # МЕТОД 2: video.get с extended=1
         try:
             url = (
-                f"https://api.vkvideo.ru/method/video.get"
-                f"?v=5.264&client_id={VK_CLIENT_ID}"
-                f"&videos={owner_id}_{video_id}&access_token={token}"
+                f"https://api.vk.com/method/video.get"
+                f"?v=5.131&access_token={token}"
+                f"&videos={owner_id}_{video_id}&extended=1"
             )
-            print(f"[upgrade] METHOD 2: trying video.get vkvideo.ru API")
+            print(f"[upgrade] METHOD 2: trying video.get with extended=1 (api.vk.com)")
             r = await client.get(url, headers={
                 "User-Agent": "Mozilla/5.0",
                 "Referer": "https://vkvideo.ru/"
