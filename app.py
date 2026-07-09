@@ -607,6 +607,19 @@ def _vkvideo_strip_xssi(text: str) -> str:
     return text
 
 
+def _vkvideo_clean_media_url(url: str) -> str:
+    if not url:
+        return url
+    u = str(url).strip().replace("`", "").strip().strip('"').strip("'").strip()
+    for _ in range(2):
+        u2 = unquote(u)
+        if u2 == u:
+            break
+        u = u2
+    u = u.strip().replace("`", "").strip().strip('"').strip("'").strip()
+    return u
+
+
 def _vkvideo_extract_urls_from_obj(obj, out: dict):
     if obj is None:
         return
@@ -615,10 +628,10 @@ def _vkvideo_extract_urls_from_obj(obj, out: dict):
         if isinstance(files, dict):
             for k, v in files.items():
                 if isinstance(v, str) and (k.startswith("mp4_") or k == "hls"):
-                    out[k] = v
+                    out[k] = _vkvideo_clean_media_url(v)
         for k, v in obj.items():
             if isinstance(v, str) and (k.startswith("mp4_") or k == "hls"):
-                out[k] = v
+                out[k] = _vkvideo_clean_media_url(v)
             _vkvideo_extract_urls_from_obj(v, out)
     elif isinstance(obj, list):
         for v in obj:
