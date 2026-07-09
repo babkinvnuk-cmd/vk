@@ -1123,6 +1123,23 @@ async def vkmovie_stream(request: Request):
 
     print(f"[vkmovie/stream] Using referer: {repr(referer)}, origin: {repr(origin)}")
 
+    # КРИТИЧНО: VK валидирует srcAg из URL с реальным User-Agent!
+    # Парсим srcAg из URL и подставляем правильный UA
+    import re
+    srcag_match = re.search(r'srcAg=([^&]+)', url)
+    srcag = srcag_match.group(1) if srcag_match else "CHROME"
+    
+    # Подбираем User-Agent в зависимости от srcAg
+    if srcag == "WEBKIT":
+        user_agent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15"
+    elif srcag == "CHROME":
+        user_agent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36"
+    else:
+        # Для UNKNOWN и остальных пробуем Chrome
+        user_agent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36"
+    
+    print(f"[vkmovie/stream] Detected srcAg={srcag}, using User-Agent: {user_agent[:80]}...")
+
     # Используем ТОЧНЫЕ заголовки из браузера Chrome (из работающего запроса пользователя)
     req_headers = {
         "Accept": "*/*",
@@ -1138,7 +1155,7 @@ async def vkmovie_stream(request: Request):
         "Sec-Fetch-Dest": "video",
         "Sec-Fetch-Mode": "cors",
         "Sec-Fetch-Site": "cross-site",
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36",
+        "User-Agent": user_agent,  # Используем UA соответствующий srcAg
     }
     
     hf = str(request.base_url).rstrip("/").replace("http://", "https://")
