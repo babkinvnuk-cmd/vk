@@ -2,6 +2,7 @@ import re
 import os
 import json
 import gzip
+import asyncio
 import httpx
 from urllib.parse import urljoin, quote, unquote, urlparse
 from fastapi import FastAPI, Request, Response
@@ -386,10 +387,85 @@ _porn_owners = set([
 _porn_owners_loaded = False
 _porn_owner_titles = {}
 _porn_owner_title_cache = {}
+_porn_owner_refs = []
+_porn_owner_titles_by_ref = {}
+_porn_owner_resolve_cache = {}
+_porn_owner_resolve_lock = None
+
+
+def _clean_owner_ref(value: str) -> str:
+    if value is None:
+        return ""
+    v = str(value).strip()
+    v = v.replace("`", "").strip()
+    v = v.strip("\"'").strip()
+    v = v.rstrip(",").strip()
+    return v
+
+
+def _parse_owner_value(value: str):
+    v = _clean_owner_ref(value)
+    if not v:
+        return None, None
+
+    try:
+        oid = int(v)
+        if oid > 0:
+            oid = -oid
+        return oid, None
+    except Exception:
+        pass
+
+    low = v.lower()
+    if low.startswith("http://") or low.startswith("https://"):
+        try:
+            u = urlparse(v)
+            p = (u.path or "").strip("/")
+            if not p:
+                return None, None
+
+            m = re.search(r"/@([a-zA-Z0-9_.]+)$", u.path or "")
+            if m:
+                return None, m.group(1)
+
+            m = re.search(r"/video/@([a-zA-Z0-9_.]+)$", u.path or "")
+            if m:
+                return None, m.group(1)
+
+            m = re.search(r"^(club|public)(\d+)$", p)
+            if m:
+                return -int(m.group(2)), None
+
+            m = re.search(r"^id(\d+)$", p)
+            if m:
+                return int(m.group(1)), None
+
+            if p.startswith("@"):
+                return None, p[1:]
+
+            if "/" in p:
+                p = p.split("/")[-1]
+            if p:
+                return None, p
+        except Exception:
+            return None, None
+
+    if v.startswith("@"):
+        return None, v[1:]
+
+    m = re.match(r"^(club|public)(\d+)$", v, re.I)
+    if m:
+        return -int(m.group(2)), None
+
+    m = re.match(r"^id(\d+)$", v, re.I)
+    if m:
+        return int(m.group(1)), None
+
+    return None, v
 
 def _load_owners_from_file():
     """Читає owner_id з owners.txt"""
-    global _porn_owners, _porn_owner_titles, _porn_owner_title_cache
+    global _porn_owners, _porn_owner_titles, _porn_owner_title_cache, _porn_owner_refs, _porn_owner_titles_by_ref
     try:
         owners_file = os.path.join(os.path.dirname(__file__), 'owners.txt')
         if os.path.exists(owners_file):
@@ -400,19 +476,93 @@ def _load_owners_from_file():
                         try:
                             if "|" in line:
                                 parts = line.split("|", 1)
-                                oid = int(parts[0].strip())
                                 title = parts[1].strip()
-                                _porn_owners.add(oid)
-                                if title:
-                                    _porn_owner_titles[oid] = title
-                                    _porn_owner_title_cache[oid] = title
+                                oid, ref = _parse_owner_value(parts[0].strip())
+                                if oid is not None:
+                                    _porn_owners.add(oid)
+                                    if title:
+                                        _porn_owner_titles[oid] = title
+                                        _porn_owner_title_cache[oid] = title
+                                elif ref:
+                                    _porn_owner_refs.append(ref)
+                                    if title:
+                                        _porn_owner_titles_by_ref[ref] = title
                             else:
-                                _porn_owners.add(int(line))
+                                oid, ref = _parse_owner_value(line)
+                                if oid is not None:
+                                    _porn_owners.add(oid)
+                                elif ref:
+                                    _porn_owner_refs.append(ref)
                         except ValueError:
                             pass
             print(f"[owners] loaded {len(_porn_owners)} owners from file")
     except Exception as e:
         print(f"[owners] file load error: {e}")
+
+
+async def _vkvideo_resolve_owner_ref(ref: str, token: str, client: httpx.AsyncClient):
+    r = _clean_owner_ref(ref)
+    if not r:
+        return None
+
+    if r in _porn_owner_resolve_cache:
+        return _porn_owner_resolve_cache.get(r)
+
+    screen_name = r[1:] if r.startswith("@") else r
+
+    candidates = [
+        f"https://api.vkvideo.ru/method/utils.resolveScreenName?v=5.264&client_id={VK_CLIENT_ID}&screen_name={quote(screen_name, safe='')}&access_token={token}",
+        f"https://api.vk.com/method/utils.resolveScreenName?v=5.131&screen_name={quote(screen_name, safe='')}&access_token={token}",
+    ]
+
+    for u in candidates:
+        try:
+            resp = await client.get(u, headers={"User-Agent": "Mozilla/5.0", "Referer": "https://vkvideo.ru/"})
+            data = resp.json()
+        except Exception:
+            continue
+
+        rdata = data.get("response") if isinstance(data, dict) else None
+        if isinstance(rdata, dict) and rdata.get("type") and rdata.get("object_id"):
+            t = str(rdata.get("type") or "").lower()
+            oid = int(rdata.get("object_id"))
+            owner_id = oid if t == "user" else -oid
+            _porn_owner_resolve_cache[r] = owner_id
+            return owner_id
+
+    return None
+
+
+async def _ensure_porn_owners_resolved(token: str, client: httpx.AsyncClient):
+    global _porn_owner_refs, _porn_owners, _porn_owner_titles, _porn_owner_title_cache, _porn_owner_titles_by_ref, _porn_owner_resolve_lock
+    if not _porn_owner_refs:
+        return
+
+    if _porn_owner_resolve_lock is None:
+        _porn_owner_resolve_lock = asyncio.Lock()
+
+    async with _porn_owner_resolve_lock:
+        if not _porn_owner_refs:
+            return
+
+        pending = []
+        for ref in _porn_owner_refs:
+            try:
+                oid = await _vkvideo_resolve_owner_ref(ref, token, client)
+            except Exception:
+                oid = None
+
+            if oid is None:
+                pending.append(ref)
+                continue
+
+            _porn_owners.add(oid)
+            title = _porn_owner_titles_by_ref.get(ref)
+            if title:
+                _porn_owner_titles[oid] = title
+                _porn_owner_title_cache[oid] = title
+
+        _porn_owner_refs = pending
 
 # Завантажуємо при старті
 _load_owners_from_file()
@@ -471,23 +621,24 @@ async def vkvideo_adult_search(q: str = "", offset: int = 0, count: int = 50, ow
     existing = set()
     q_words = [w.lower() for w in q.lower().split() if len(w) > 2]
 
-    all_owners = list(_porn_owners)
-    if owners:
-        try:
-            parsed = []
-            for part in str(owners).split(","):
-                p = part.strip()
-                if not p:
-                    continue
-                parsed.append(int(p))
-            if parsed:
-                all_owners = [oid for oid in parsed if oid in _porn_owners]
-        except Exception:
-            pass
-    print(f"[adult] searching q='{q}' across {len(all_owners)} owners")
-
     async with httpx.AsyncClient(timeout=30, follow_redirects=True) as client:
         import asyncio
+        await _ensure_porn_owners_resolved(token, client)
+
+        all_owners = list(_porn_owners)
+        if owners:
+            try:
+                parsed = []
+                for part in str(owners).split(","):
+                    p = part.strip()
+                    if not p:
+                        continue
+                    parsed.append(int(p))
+                if parsed:
+                    all_owners = [oid for oid in parsed if oid in _porn_owners]
+            except Exception:
+                pass
+        print(f"[adult] searching q='{q}' across {len(all_owners)} owners")
 
         async def fetch_owner(owner_id):
             try:
@@ -623,12 +774,13 @@ async def vkvideo_channels():
     if not token:
         return Response(content='{"error":"no_token"}', status_code=503,
                         media_type="application/json", headers={"Access-Control-Allow-Origin": "*"})
-
-    owners = sorted(list(_porn_owners))
     import asyncio
     sem = asyncio.Semaphore(6)
 
     async with httpx.AsyncClient(timeout=12, follow_redirects=True) as client:
+        await _ensure_porn_owners_resolved(token, client)
+        owners = sorted(list(_porn_owners))
+
         async def one(oid: int):
             async with sem:
                 t = await _vkvideo_owner_title(oid, token, client)
