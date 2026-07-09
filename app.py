@@ -1088,6 +1088,8 @@ async def vkmovie_stream(request: Request):
     # Helper function to rewrite m3u8
     def rewrite_m3u8_content(text_content):
         base = url.rsplit("/", 1)[0] + "/"
+        print(f"[vkmovie/stream] m3u8 rewrite base URL: {base}")
+        
         def rewrite_seg(seg):
             seg = seg.strip()
             if not seg: return seg
@@ -1097,7 +1099,16 @@ async def vkmovie_stream(request: Request):
                 abs_url = "https:" + seg
             else:
                 abs_url = urljoin(base, seg)
-            return f"{hf}/vkmovie/stream?url={quote(abs_url, safe='')}"
+            
+            rewritten = f"{hf}/vkmovie/stream?url={quote(abs_url, safe='')}"
+            # Логируем первые 3 сегмента
+            if not hasattr(rewrite_seg, 'count'):
+                rewrite_seg.count = 0
+            if rewrite_seg.count < 3:
+                print(f"[vkmovie/stream] m3u8 segment {rewrite_seg.count}: {seg[:80]} -> {rewritten[:120]}")
+                rewrite_seg.count += 1
+            return rewritten
+        
         lines = text_content.splitlines()
         out = []
         for line in lines:
@@ -1174,19 +1185,25 @@ async def vkmovie_stream(request: Request):
         # m3u8 — завантажуємо повністю БЕЗ range header (если он был)
         async with httpx.AsyncClient(timeout=15, follow_redirects=True) as client:
             try:
-                m3u8_headers = {
-                    "User-Agent": req_headers["User-Agent"],
-                    "Referer": req_headers.get("Referer", ""),
-                    "Origin": req_headers.get("Origin", "")
-                }
-                print(f"[vkmovie/stream] Fetching detected m3u8: {url}")
+                # Используем ВСЕ заголовки (без range)
+                m3u8_headers = dict(req_headers)
+                if "range" in m3u8_headers:
+                    del m3u8_headers["range"]
+                
+                print(f"[vkmovie/stream] Fetching m3u8: {url[:100]}...")
+                print(f"[vkmovie/stream] m3u8 headers: {m3u8_headers}")
                 r = await client.get(url, headers=m3u8_headers)
+                print(f"[vkmovie/stream] m3u8 response: status={r.status_code}, content_length={len(r.content)}")
                 text = r.text
+                print(f"[vkmovie/stream] m3u8 content preview: {text[:200]}")
             except Exception as e:
+                print(f"[vkmovie/stream] m3u8 fetch error: {e}")
                 return Response(content=f"error: {e}", status_code=500)
 
+        rewritten = rewrite_m3u8_content(text)
+        print(f"[vkmovie/stream] m3u8 rewritten preview: {rewritten[:200]}")
         return Response(
-            content=rewrite_m3u8_content(text),
+            content=rewritten,
             media_type="application/vnd.apple.mpegurl",
             headers={"Access-Control-Allow-Origin": "*"}
         )
